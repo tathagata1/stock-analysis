@@ -1,0 +1,44 @@
+[
+    {
+        "ticker": "F",
+        "date": "2024-11-25",
+        "units": 5.50007,
+        "average_buying_price": 11.41
+    },
+    {
+        "ticker": "PFE",
+        "date": "2024-11-25",
+        "units": 2.404609,
+        "average_buying_price": 26.1
+    },
+    {
+        "ticker": "SIRI",
+        "date": "2024-11-25",
+        "units": 2.351696,
+        "average_buying_price": 26.7
+    },
+    {
+        "ticker": "T",
+        "date": "2024-11-25",
+        "units": 2.716996,
+        "average_buying_price": 23.11
+    },
+    {
+        "ticker": "MSTR",
+        "date": "2024-11-27",
+        "units": 0.1621235,
+        "average_buying_price": 390.48
+    },
+    {
+        "ticker": "STLA",
+        "date": "2024-11-27",
+        "units": 4.945937,
+        "average_buying_price": 12.8
+    },
+    {
+        "ticker": "FTAI",
+        "date": "2024-11-28",
+        "units": 0.3789431,
+        "average_buying_price": 167.00
+    }
+]
