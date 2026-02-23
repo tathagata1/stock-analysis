@@ -249,7 +249,7 @@ def get_yahoo_finance_key_stats(var_stock):
 def get_reddit_links(var_stock):
     try:
         query = quote_plus(var_stock)
-        url = f"{config.reddit_url}/search.json?q={query}&sort=new&limit=5"
+        url = f"{config.reddit_url}/search.json?q={query}&sort=new&limit=10"
         response = _safe_request(url)
         response.raise_for_status()
         payload = response.json()
@@ -261,7 +261,7 @@ def get_reddit_links(var_stock):
             permalink = data.get('permalink')
             if permalink:
                 comment_links.append(config.reddit_url + permalink)
-        return comment_links[:5]
+        return comment_links[:10]
     except Exception as exc:
         logging.error("Error in get_reddit_links for %s: %s", var_stock, exc)
         return None
