@@ -53,7 +53,31 @@
       "execution_count": null,
       "id": "126e196a",
       "metadata": {},
-      "outputs": [],
+      "outputs": [
+        {
+          "name": "stdout",
+          "output_type": "stream",
+          "text": [
+            "error in get_gpt_score_with_confidence\n",
+            "error in get_gpt_score_with_confidence\n",
+            "error in get_gpt_score_with_confidence\n",
+            "error in get_gpt_score_with_confidence\n",
+            "error in get_gpt_score_with_confidence\n",
+            "error in get_gpt_score_with_confidence\n",
+            "error in get_gpt_score_with_confidence\n",
+            "error in get_gpt_score_with_confidence\n",
+            "error in get_gpt_score_with_confidence\n",
+            "error in get_gpt_score_with_confidence\n",
+            "error in get_gpt_score_with_confidence\n",
+            "error in get_gpt_score_with_confidence\n",
+            "error in get_gpt_score_with_confidence\n",
+            "error in get_gpt_score_with_confidence\n",
+            "error in get_gpt_score_with_confidence\n",
+            "error in get_gpt_score_with_confidence\n",
+            "error in get_gpt_score_with_confidence\n"
+          ]
+        }
+      ],
       "source": [
         "result = analysis_blocks.run_index_search_workflow(\n",
         "    index_name=index_name,\n",
