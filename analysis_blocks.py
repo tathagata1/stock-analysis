@@ -1,4 +1,6 @@
+import json
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 
@@ -10,6 +12,8 @@ import simulation
 
 DEFAULT_SIGNAL_LOOKBACK_START = 1
 DEFAULT_SIGNAL_LOOKBACK_END = 30
+DEFAULT_CACHE_DIR = "cache"
+DEFAULT_INDEX_CACHE_MAX_AGE_HOURS = 24
 
 
 def _safe_float(value):
@@ -40,6 +44,70 @@ def current_run_date():
 
 def load_portfolio(portfolio_path):
     return dao.read_json(portfolio_path)
+
+
+def _index_ticker_cache_path(index_name, cache_dir=DEFAULT_CACHE_DIR):
+    cache_path = Path(cache_dir)
+    cache_path.mkdir(parents=True, exist_ok=True)
+    return cache_path / f"{index_name.lower()}_tickers.json"
+
+
+def _read_cached_tickers(cache_file):
+    payload = json.loads(cache_file.read_text(encoding="utf-8"))
+    if isinstance(payload, dict):
+        tickers = payload.get("tickers", [])
+    elif isinstance(payload, list):
+        tickers = payload
+    else:
+        tickers = []
+    return [str(t).strip() for t in tickers if str(t).strip()]
+
+
+def get_index_tickers_cached(index_name="sp500", limit=None, cache_dir=DEFAULT_CACHE_DIR, max_age_hours=DEFAULT_INDEX_CACHE_MAX_AGE_HOURS):
+    cache_file = _index_ticker_cache_path(index_name, cache_dir=cache_dir)
+    now = datetime.now().timestamp()
+    max_age_seconds = max_age_hours * 3600
+    cache_used = False
+    cache_deleted = False
+    tickers = []
+
+    if cache_file.exists():
+        cache_age_seconds = now - cache_file.stat().st_mtime
+        if cache_age_seconds < max_age_seconds:
+            try:
+                tickers = _read_cached_tickers(cache_file)
+                cache_used = True
+            except Exception:
+                cache_file.unlink(missing_ok=True)
+                cache_deleted = True
+        else:
+            cache_file.unlink(missing_ok=True)
+            cache_deleted = True
+
+    if not cache_used:
+        tickers = dao.get_index_constituents(index_name)
+        payload = {
+            "index_name": index_name,
+            "fetched_at": datetime.now().isoformat(timespec="seconds"),
+            "tickers": tickers,
+        }
+        cache_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    if limit is not None:
+        tickers = tickers[:limit]
+
+    cache_age_seconds = None
+    if cache_file.exists():
+        cache_age_seconds = max(0, datetime.now().timestamp() - cache_file.stat().st_mtime)
+
+    cache_meta = {
+        "cache_file": str(cache_file),
+        "cache_used": cache_used,
+        "cache_deleted": cache_deleted,
+        "max_age_hours": max_age_hours,
+        "cache_age_hours": None if cache_age_seconds is None else round(cache_age_seconds / 3600, 3),
+    }
+    return tickers, cache_meta
 
 
 def get_index_tickers(index_name="sp500", limit=None):
@@ -212,8 +280,25 @@ def run_specific_stock_simulation_workflow(tickers, initial_funds=1000, include_
     }
 
 
-def run_index_search_workflow(index_name="sp500", limit=50, include_sentiment=False, include_fundamentals=True):
-    tickers = get_index_tickers(index_name=index_name, limit=limit)
+def run_index_search_workflow(
+    index_name="sp500",
+    limit=50,
+    include_sentiment=False,
+    include_fundamentals=True,
+    use_ticker_cache=True,
+    ticker_cache_dir=DEFAULT_CACHE_DIR,
+    ticker_cache_max_age_hours=DEFAULT_INDEX_CACHE_MAX_AGE_HOURS,
+):
+    if use_ticker_cache:
+        tickers, ticker_cache = get_index_tickers_cached(
+            index_name=index_name,
+            limit=limit,
+            cache_dir=ticker_cache_dir,
+            max_age_hours=ticker_cache_max_age_hours,
+        )
+    else:
+        tickers = get_index_tickers(index_name=index_name, limit=limit)
+        ticker_cache = None
     analyses = {}
     prediction_rows = []
     for ticker in tickers:
@@ -230,6 +315,7 @@ def run_index_search_workflow(index_name="sp500", limit=50, include_sentiment=Fa
         "tickers": tickers,
         "analyses": analyses,
         "prediction_summary": pd.DataFrame(prediction_rows),
+        "ticker_cache": ticker_cache,
     }
     if not result["prediction_summary"].empty:
         result["prediction_summary"] = result["prediction_summary"].sort_values(
