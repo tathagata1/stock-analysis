@@ -32,8 +32,8 @@
       "metadata": {},
       "outputs": [],
       "source": [
-        "index_name = \"sp500\"  # options: sp500, nasdaq100, dow30\n",
-        "limit = 500  # reduce for quicker scans\n",
+        "index_name = \"dow30\"  # options: sp500, nasdaq100, dow30\n",
+        "limit = 30  # reduce for quicker scans\n",
         "include_fundamentals = True\n",
         "include_sentiment = True  # True requires API keys and adds latency\n",
         "ticker_cache_dir = \"cache\"\n",
@@ -53,31 +53,7 @@
       "execution_count": null,
       "id": "126e196a",
       "metadata": {},
-      "outputs": [
-        {
-          "name": "stdout",
-          "output_type": "stream",
-          "text": [
-            "error in get_gpt_score_with_confidence\n",
-            "error in get_gpt_score_with_confidence\n",
-            "error in get_gpt_score_with_confidence\n",
-            "error in get_gpt_score_with_confidence\n",
-            "error in get_gpt_score_with_confidence\n",
-            "error in get_gpt_score_with_confidence\n",
-            "error in get_gpt_score_with_confidence\n",
-            "error in get_gpt_score_with_confidence\n",
-            "error in get_gpt_score_with_confidence\n",
-            "error in get_gpt_score_with_confidence\n",
-            "error in get_gpt_score_with_confidence\n",
-            "error in get_gpt_score_with_confidence\n",
-            "error in get_gpt_score_with_confidence\n",
-            "error in get_gpt_score_with_confidence\n",
-            "error in get_gpt_score_with_confidence\n",
-            "error in get_gpt_score_with_confidence\n",
-            "error in get_gpt_score_with_confidence\n"
-          ]
-        }
-      ],
+      "outputs": [],
       "source": [
         "result = analysis_blocks.run_index_search_workflow(\n",
         "    index_name=index_name,\n",
@@ -108,9 +84,9 @@
         "ranked = result[\"prediction_summary\"]\n",
         "signal_only = ranked[ranked[\"Signal_Text\"] != \"HOLD\"].reset_index(drop=True)\n",
         "\n",
-        "signal_only.to_csv(\"output/03_index_search_sp500.csv\", index=False)\n",
+        "signal_only.to_csv(\"output/03_index_search_dow30.csv\", index=False)\n",
         "\n",
-        "signal_only.head(500)"
+        "signal_only.head(30)"
       ]
     }
   ],

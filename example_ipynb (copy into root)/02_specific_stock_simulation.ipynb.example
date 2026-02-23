@@ -4,9 +4,9 @@
       "cell_type": "markdown",
       "metadata": {},
       "source": [
-        "# Current Holdings Review\n",
+        "# Specific Stocks Simulation\n",
         "        \n",
-        "        Modular notebook for reviewing your current holdings, running the prediction pipeline, and simulating portfolio actions from the holding date.\n"
+        "        Run the prediction pipeline for a custom ticker list and simulate exploratory trading using the generated signals.\n"
       ]
     },
     {
@@ -15,7 +15,6 @@
       "metadata": {},
       "outputs": [],
       "source": [
-        "import pandas as pd\n",
         "import analysis_blocks"
       ]
     },
@@ -32,16 +31,17 @@
       "metadata": {},
       "outputs": [],
       "source": [
-        "portfolio_path = \"portfolio/real_portfolio.json\"\n",
+        "tickers = [\"NVDA\"]\n",
         "initial_funds = 1000\n",
-        "include_sentiment = True  # True requires API keys and adds latency"
+        "include_fundamentals = True\n",
+        "include_sentiment = True  # True requires API keys and adds latency\n"
       ]
     },
     {
       "cell_type": "markdown",
       "metadata": {},
       "source": [
-        "## Block 2: Run Holdings Workflow\n"
+        "## Block 2: Run Workflow\n"
       ]
     },
     {
@@ -50,11 +50,12 @@
       "metadata": {},
       "outputs": [],
       "source": [
-        "result = analysis_blocks.run_holdings_workflow(\n",
-        "    portfolio_path=portfolio_path,\n",
+        "result = analysis_blocks.run_specific_stock_simulation_workflow(\n",
+        "    tickers=tickers,\n",
         "    initial_funds=initial_funds,\n",
         "    include_sentiment=include_sentiment,\n",
-        ")\n"
+        "    include_fundamentals=include_fundamentals,\n",
+        ")"
       ]
     },
     {
@@ -70,10 +71,7 @@
       "metadata": {},
       "outputs": [],
       "source": [
-        "holdings_view = analysis_blocks.extract_holdings_pnl_view(result)\n",
-        "prediction_summary = result[\"prediction_summary\"].sort_values(by=[\"Signal\", \"cumulative_return\"], ascending=[False, False])\n",
-        "portfolio_sim_summary = result[\"portfolio_simulation_summary\"].sort_values(by=[\"signal_number\", \"unrealized_gain_loss_%\"], ascending=[False, False])\n",
-        "holdings_view\n"
+        "result[\"prediction_summary\"].sort_values(by=[\"Signal\", \"cumulative_return\"], ascending=[False, False])"
       ]
     },
     {
@@ -82,7 +80,14 @@
       "metadata": {},
       "outputs": [],
       "source": [
-        "prediction_summary"
+        "result[\"exploratory_simulation_summary\"].sort_values(by=[\"signal_number\", \"unrealized_gain_loss_%\"], ascending=[False, False])"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## Block 4: Drill Into One Stock\n"
       ]
     },
     {
@@ -91,7 +96,17 @@
       "metadata": {},
       "outputs": [],
       "source": [
-        "portfolio_sim_summary"
+        "ticker = tickers[0]\n",
+        "result[\"analyses\"][ticker][\"df_tested\"].head()"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "result[\"analyses\"][ticker][\"exploratory_simulation\"]"
       ]
     }
   ],
