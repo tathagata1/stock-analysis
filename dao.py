@@ -1,9 +1,11 @@
 import os
 import logging
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from io import StringIO
 from urllib.parse import quote_plus
+import xml.etree.ElementTree as ET
 
 import pandas as pd
 import requests
@@ -251,11 +253,51 @@ def get_reddit_post(link):
 
 
 def get_news_links(stock):
-    current_date = (datetime.now() - timedelta(2)).strftime("%Y-%m-%d")
-    url = config.newapi_url + config.newsapi_query + stock + config.newsapi_from + current_date + config.newapi_api + config.newsapi_key
-    response = requests.get(url, headers=REQUEST_HEADERS, timeout=15)
-    data = json.loads(response.text)
-    articles = data.get('articles', [])
+    query = quote_plus(f"{stock} stock")
+    url = f"{config.google_news_rss_url}{query}&hl=en-US&gl=US&ceid=US:en"
+
+    try:
+        response = requests.get(url, headers=REQUEST_HEADERS, timeout=15)
+        response.raise_for_status()
+        root = ET.fromstring(response.content)
+    except Exception as exc:
+        logging.error("Error in get_news_links for %s: %s", stock, exc)
+        return []
+
+    articles = []
+    for item in root.findall("./channel/item"):
+        title = (item.findtext("title") or "").strip()
+        link = (item.findtext("link") or "").strip()
+        description = (item.findtext("description") or "").strip()
+        pub_date = (item.findtext("pubDate") or "").strip()
+        source_name = (item.findtext("source") or "").strip()
+
+        published_at = None
+        if pub_date:
+            try:
+                dt = parsedate_to_datetime(pub_date)
+                if dt.tzinfo is None:
+                    published_at = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+                else:
+                    published_at = dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            except Exception:
+                published_at = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        else:
+            published_at = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        if not source_name and " - " in title:
+            source_name = title.rsplit(" - ", 1)[-1].strip()
+
+        articles.append({
+            "publishedAt": published_at,
+            "source": {"name": source_name},
+            "author": "",
+            "title": title,
+            "content": "",
+            "description": BeautifulSoup(description, "html.parser").get_text(" ", strip=True),
+            "url": link,
+        })
+
     return articles
 
 

@@ -3,14 +3,9 @@ import configparser
 config = configparser.ConfigParser()
 config.read('config.ini')
 
-path_data_dump=config['Misc']['data_dump_folder']
 chatgpt_key=config['API']['chatgpt_key']
 
-newsapi_key=config['API']['newsapi_key']
-newapi_url=config['Selenium']['newapi_url']
-newsapi_query=config['Selenium']['newsapi_query']
-newsapi_from=config['Selenium']['newsapi_from']
-newapi_api=config['Selenium']['newapi_api']
+google_news_rss_url=config['Selenium']['google_news_rss_url']
 
 reddit_url=config['Selenium']['redditURL']
 
