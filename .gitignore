@@ -1,7 +1,5 @@
 portfolio/*
-data_dump/*
-summaries/*
-__pycache__
-config.ini
 cache/*
 output/*
+__pycache__
+config.ini
