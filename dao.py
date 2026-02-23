@@ -1,25 +1,105 @@
 import os
-import time
-import utils
-import config
 import logging
-import pandas as pd
-from bs4 import BeautifulSoup
-from selenium.webdriver.common.by import By
-from openai import OpenAI
-from datetime import datetime, timedelta
-import requests
 import json
+import re
+from datetime import datetime, timedelta
+from io import StringIO
+from urllib.parse import quote_plus
+
+import pandas as pd
+import requests
+from bs4 import BeautifulSoup
+from openai import OpenAI
+
+import config
+
+try:
+    import yfinance as yf
+except ImportError:  # pragma: no cover - handled at runtime in helper
+    yf = None
+
+
+REQUEST_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+    )
+}
+
+INDEX_SOURCES = {
+    "sp500": {
+        "url": "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
+        "column": "Symbol",
+    },
+    "nasdaq100": {
+        "url": "https://en.wikipedia.org/wiki/Nasdaq-100",
+        "column": "Ticker",
+    },
+    "dow30": {
+        "url": "https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average",
+        "column": "Symbol",
+    },
+}
+
+STAT_FIELD_MAP = {
+    "Market Cap": "marketCap",
+    "Enterprise Value": "enterpriseValue",
+    "Trailing P/E": "trailingPE",
+    "Forward P/E": "forwardPE",
+    "PEG Ratio (5yr expected)": "pegRatio",
+    "Price/Sales": "priceToSalesTrailing12Months",
+    "Price/Book": "priceToBook",
+    "Enterprise Value/Revenue": "enterpriseToRevenue",
+    "Enterprise Value/EBITDA": "enterpriseToEbitda",
+}
+
+
+def _require_yfinance():
+    if yf is None:
+        raise ImportError("yfinance is required. Install it with: pip install yfinance")
+
+
+def _normalize_numeric_or_missing(value):
+    if value is None:
+        return "--"
+    try:
+        if pd.isna(value):
+            return "--"
+    except Exception:
+        pass
+    return value
+
+
+def _safe_request(url, timeout=15):
+    return requests.get(url, headers=REQUEST_HEADERS, timeout=timeout)
+
+
+def _extract_visible_text_from_html(html):
+    soup = BeautifulSoup(html, 'html.parser')
+    for tag in soup(["script", "style", "header", "footer", "nav", "aside"]):
+        tag.decompose()
+    return soup.get_text(separator=' ', strip=True).replace("'", "")
+
+
+def _safe_ticker_info(var_stock):
+    _require_yfinance()
+    ticker = yf.Ticker(var_stock)
+    info = {}
+    try:
+        info = ticker.info or {}
+    except Exception as exc:
+        logging.error("Error fetching info for %s: %s", var_stock, exc)
+    return ticker, info
 
 
 def get_gpt_score_with_confidence(stock, post):
-    
+
     try:
         os.environ['OPENAI_API_KEY'] = config.chatgpt_key
         client = OpenAI()
         command='you need to analyse the following reddit post for '+stock+'. you need to respond in the format { "score": "VAR_X", "confidence": "VAR_Y" }. VAR_X can vary from -1.000 to +1.0000. VAR_Y will be your confidence on the buy/sell indication and will vary between 0.00 and 1.00. I do not need anything else other than { "score": "VAR_X", "confidence": "VAR_Y" }. Here is the text: '+post
         completion = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.1",
             messages=[
                 {"role": "system", "content": "you are an expert in the stock market analysis."},
                 {
@@ -28,18 +108,19 @@ def get_gpt_score_with_confidence(stock, post):
                 }
             ]
         )
-    except:
+    except Exception:
         print("error in get_gpt_score_with_confidence")
         return '{ "score": "0", "confidence": "0" }'
-    
+
     return completion.choices[0].message.content
+
 
 def get_gpt_misc(text, primer):
     try:
         os.environ['OPENAI_API_KEY'] = config.chatgpt_key
         client = OpenAI()
         completion = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.1",
             messages=[
                 {"role": "system", "content": primer},
                 {
@@ -48,23 +129,26 @@ def get_gpt_misc(text, primer):
                 }
             ]
         )
-    except:
+    except Exception:
         print("error in get_gpt_misc")
         return 'unable to parse data'
-    
+
     return completion.choices[0].message.content
 
+
 def write_csv(file_name, tmp_data):
-    if(os.path.isfile(file_name)):
+    if os.path.isfile(file_name):
         os.remove(file_name)
-    data=pd.DataFrame(data=tmp_data)
+    data = pd.DataFrame(data=tmp_data)
     data.to_csv(file_name, index=True)
-    
+
+
 def write_json(file_name, tmp_data):
-    if(os.path.isfile(file_name)):
+    if os.path.isfile(file_name):
         os.remove(file_name)
     with open(file_name, 'w') as file:
         json.dump(tmp_data, file, indent=4)
+
 
 def read_json(file_name):
     with open(file_name, 'r') as file:
@@ -72,306 +156,178 @@ def read_json(file_name):
 
     return json.loads(content)
 
-def get_yahoo_finance_stock_list(criteria, count=1):
-    
-    stocks = []
-    
+
+def get_index_constituents(index_name="sp500"):
+    source = INDEX_SOURCES.get(index_name.lower())
+    if source is None:
+        raise ValueError(f"Unsupported index_name: {index_name}. Use one of {sorted(INDEX_SOURCES)}")
+
     try:
-        driver = utils.get_driver()
-        driver.get(config.stock_list+criteria+str(count))
-        time.sleep(config.var_sleep)
+        response = _safe_request(source["url"])
+        response.raise_for_status()
+        tables = pd.read_html(StringIO(response.text))
+    except Exception as exc:
+        logging.error("Error reading index constituents for %s: %s", index_name, exc)
+        return []
 
-        # Handle cookie consent
-        try:
-            cookie_accept_button = driver.find_element(By.XPATH, '//button[@class="btn secondary accept-all "]')
-            cookie_accept_button.click()
-            logging.info("Cookie consent accepted.")
-        except Exception as e:
-            logging.error(f"Could not accept cookie consent: {str(e)}")
+    for table in tables:
+        if source["column"] in table.columns:
+            tickers = table[source["column"]].astype(str).str.strip().tolist()
+            # Yahoo Finance uses '-' instead of '.' for class shares (e.g., BRK.B -> BRK-B)
+            return [ticker.replace('.', '-') for ticker in tickers if ticker and ticker != 'nan']
 
-        # Sort by 52-week change
-        try:
-            date_filter = driver.find_element(By.XPATH, '//*[@id="nimbus-app"]/section/section/section/article/section[1]/div/div[2]/div/table/thead/tr/th[11]/div')
-            date_filter.click()
-            logging.info("52-week change sorted.")
-        except Exception as e:
-            logging.error(f"Could not sort: {str(e)}")
+    logging.error("Could not find ticker column %s for %s", source["column"], index_name)
+    return []
 
-        time.sleep(config.var_sleep)
-        
-        # Locate the table element containing stock data
-        try:
-            table = driver.find_element(By.XPATH, '//tbody')
-            table_html = table.get_attribute('innerHTML')
-            
-            # Parse the table HTML with BeautifulSoup
-            soup = BeautifulSoup(table_html, 'html.parser')
 
-            # Extract all stock symbols
-            for stock in soup.select('a[data-testid="table-cell-ticker"] .symbol'):
-                stocks.append(stock.get_text(strip=True))
-                
-            return stocks
+def get_yahoo_finance_stock_list(criteria, count=1):
+    criteria_lower = str(criteria).lower()
+    if "nasdaq" in criteria_lower or "trending" in criteria_lower:
+        base_list = get_index_constituents("nasdaq100")
+    elif "dow" in criteria_lower:
+        base_list = get_index_constituents("dow30")
+    else:
+        base_list = get_index_constituents("sp500")
 
-        except Exception as e:
-            logging.error(f"Error in get_yahoo_finance_stock_list")
+    try:
+        limit = int(count)
+    except Exception:
+        limit = len(base_list)
+    return base_list[:max(limit, 0)]
 
-    finally:
-        driver.close()
-        logging.info("Browser closed.")
 
 def get_yahoo_finance_5y(var_stock):
-    
+    _require_yfinance()
     try:
-        driver=utils.get_driver()
-        driver.get(config.base_url+var_stock+config.history)
-        time.sleep(config.var_sleep)
+        ticker = yf.Ticker(var_stock)
+        hist = ticker.history(period="5y", auto_adjust=False, actions=False)
+        if hist is None or hist.empty:
+            logging.error("Error in get_yahoo_finance_5y for %s", var_stock)
+            return pd.DataFrame(columns=['Date', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume', 'TICKER'])
 
-        # Handle cookie consent
-        cookie_accept_button = driver.find_element(By.XPATH, '//button[@class="btn secondary accept-all "]')
-        cookie_accept_button.click()
-        logging.info("Cookie consent accepted.")
+        if 'Adj Close' not in hist.columns:
+            hist['Adj Close'] = hist['Close']
 
-        # Handle date filter
-        date_filter = driver.find_element(By.XPATH, '//span[@class="label yf-1th5n0r"]')
-        date_filter.click()
-        logging.info("Date filter clicked.")
-        
-        five_year_button = driver.find_element(By.XPATH, '//button[@value="5_Y"]')
-        five_year_button.click()
-        logging.info("5-year filter clicked.")
-        time.sleep(config.var_sleep)
-        
-        # Locate the table element containing historical stock data
-        table = driver.find_element(By.XPATH, '//tbody')
-        table_html = table.get_attribute('innerHTML')
-        soup = BeautifulSoup(table_html, 'html.parser')
-        rows = []
-        for row in soup.find_all('tr'):
-            cols = [col.get_text() for col in row.find_all('td')]
-            if cols and "Dividend" not in cols[0]:  # Filter out rows where the first column contains 'Dividend'
-                rows.append(cols)
+        hist = hist.reset_index()
+        date_col = hist.columns[0]
+        hist.rename(columns={date_col: 'Date'}, inplace=True)
+        hist['Date'] = pd.to_datetime(hist['Date']).dt.tz_localize(None)
+        hist = hist[['Date', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']]
+        hist['TICKER'] = var_stock
+        hist = hist.sort_values('Date', ascending=False).reset_index(drop=True)
+        return hist
 
-        df = pd.DataFrame(data=rows, columns=['Date', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume'])
-        df.dropna(inplace=True)
-        #format df
-        df.set_index('Date', inplace=True)
-        df.index = pd.to_datetime(df.index, errors='coerce')
-        df['Date']=df.index
-        df.reset_index(drop=True, inplace=True)
-        df['Volume'] = df['Volume'].apply(utils.remove_comma)
-        df['TICKER']=var_stock
-        return df
+    except Exception as exc:
+        logging.error("Error in get_yahoo_finance_5y for %s: %s", var_stock, exc)
+        return pd.DataFrame(columns=['Date', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume', 'TICKER'])
 
-    except Exception as e:
-        logging.error(f"Error in get_yahoo_finance_5y for "+var_stock)
-
-    finally:
-        driver.close()
-        logging.info("Browser closed.")
 
 def get_yahoo_finance_key_stats(var_stock):
-    
     try:
-        driver=utils.get_driver()
-        driver.get(config.base_url+var_stock+config.stats)
-        time.sleep(config.var_sleep)
+        _, info = _safe_ticker_info(var_stock)
+        row = {display_name: _normalize_numeric_or_missing(info.get(info_key)) for display_name, info_key in STAT_FIELD_MAP.items()}
+        row['TICKER'] = var_stock
+        return pd.DataFrame([row])
+    except Exception as exc:
+        logging.error("Error in get_yahoo_finance_key_stats for %s: %s", var_stock, exc)
+        row = {display_name: "--" for display_name in STAT_FIELD_MAP}
+        row['TICKER'] = var_stock
+        return pd.DataFrame([row])
 
-        # Handle cookie consent
-        try:
-            cookie_accept_button = driver.find_element(By.XPATH, '//button[@class="btn secondary accept-all "]')
-            cookie_accept_button.click()
-            logging.info("Cookie consent accepted.")
-        except Exception as e:
-            logging.error(f"Could not accept cookie consent: {str(e)}")
 
-        time.sleep(config.var_sleep)
-        
-        #get the header
-        table = driver.find_element(By.XPATH, '//*[@id="nimbus-app"]/section/section/section/article/section[2]/div/table/thead')
-        table_html = table.get_attribute('innerHTML')
-        soup = BeautifulSoup(table_html, 'html.parser')
-        for row in soup.find_all('tr'):
-            header = [col.get_text() for col in row.find_all('th')]
-         
-        try:
-            table = driver.find_element(By.XPATH, '//tbody')
-            table_html = table.get_attribute('innerHTML')            
-            soup = BeautifulSoup(table_html, 'html.parser')
-            rows = []
-            for row in soup.find_all('tr'):
-                cols = [col.get_text() for col in row.find_all('td')]
-                rows.append(cols)
-                       
-            # Convert the rows into a DataFrame
-            df = pd.DataFrame(data=rows, columns=header)
-            df.dropna(inplace=True)
-            df.rename(columns={ df.columns[0]: "Date" }, inplace = True)
-            df = df.transpose()
-            df.columns = df.iloc[0]
-            df = df.iloc[1:]
-            df['Market Cap'] = df['Market Cap'].apply(utils.convert_number)
-            df['Enterprise Value'] = df['Enterprise Value'].apply(utils.convert_number)
-            df['Trailing P/E'] = df['Trailing P/E'].apply(utils.convert_number)
-            df['Forward P/E'] = df['Forward P/E'].apply(utils.convert_number)
-            df['PEG Ratio (5yr expected)'] = df['PEG Ratio (5yr expected)'].apply(utils.convert_number)
-            df['Price/Sales'] = df['Price/Sales'].apply(utils.convert_number)
-            df['Price/Book'] = df['Price/Book'].apply(utils.convert_number)
-            df['Enterprise Value/Revenue'] = df['Enterprise Value/Revenue'].apply(utils.convert_number)
-            df['Enterprise Value/EBITDA'] = df['Enterprise Value/EBITDA'].apply(utils.convert_number)
-            df['TICKER']=var_stock
-            return df
-
-        except Exception as e:
-            logging.error(f"Error in get_yahoo_finance_key_stats for "+var_stock)
-
-    finally:
-        driver.close()
-        logging.info("Browser closed.")
-        
 def get_reddit_links(var_stock):
-    
     try:
-        driver=utils.get_driver()
-        driver.get(config.reddit_url+config.reddit_param_1+var_stock+config.reddit_param_2)
-   
-        table = driver.find_element(By.XPATH, '//*[@id="main-content"]/div/reddit-feed')
-        table_html = table.get_attribute('innerHTML')
+        query = quote_plus(var_stock)
+        url = f"{config.reddit_url}/search.json?q={query}&sort=new&limit=5"
+        response = _safe_request(url)
+        response.raise_for_status()
+        payload = response.json()
 
-        # Parse the table HTML with BeautifulSoup
-        soup = BeautifulSoup(table_html, 'html.parser')
-
-        # Extract all stock symbols
         comment_links = []
-        for link in soup.select('a[data-testid="post-title"]'):
-            # Extract the href attribute for each link
-            href = link.get('href')
-            if href:
-                full_url = config.reddit_url+href  # Construct full URL
-                comment_links.append(full_url)
-        
+        children = payload.get('data', {}).get('children', [])
+        for child in children:
+            data = child.get('data', {})
+            permalink = data.get('permalink')
+            if permalink:
+                comment_links.append(config.reddit_url + permalink)
         return comment_links[:5]
-    except Exception as e:
-        logging.error(f"Error in get_reddit_links for "+var_stock)
+    except Exception as exc:
+        logging.error("Error in get_reddit_links for %s: %s", var_stock, exc)
         return None
 
-    finally:
-        driver.close()
-        logging.info("Browser closed.")
 
 def get_reddit_post(link):
-    
     try:
-        # Initialize the driver and open the Reddit post link
-        driver = utils.get_driver()
-        driver.get(link)
-        time.sleep(config.var_sleep)
-        
-        # Parse the loaded page HTML with BeautifulSoup
-        soup = BeautifulSoup(driver.page_source, 'html.parser')
+        json_url = link.rstrip('/') + '.json'
+        response = _safe_request(json_url)
+        response.raise_for_status()
+        payload = response.json()
 
-        # Remove scripts, styles, and other non-content elements
-        for tag in soup(["script", "style", "header", "footer", "nav", "aside"]):
-            tag.decompose()  # Remove the element from the soup
+        pieces = []
+        if isinstance(payload, list) and payload:
+            post_children = payload[0].get('data', {}).get('children', [])
+            if post_children:
+                post_data = post_children[0].get('data', {})
+                pieces.extend([
+                    str(post_data.get('title', '')),
+                    str(post_data.get('selftext', '')),
+                ])
 
-        # Extract all visible text as a single cleaned string
-        page_text = soup.get_text(separator=' ', strip=True)
-        
-        # Define the text to be removed
-        unwanted_text = (
-            "Reddit and its partners use cookies and similar technologies to provide you with a better experience. "
-            "By accepting all cookies, you agree to our use of cookies to deliver and maintain our services and site, "
-            "improve the quality of Reddit, personalize Reddit content and advertising, and measure the effectiveness "
-            "of advertising. By rejecting non-essential cookies, Reddit may still use certain cookies to ensure the "
-            "proper functionality of our platform. For more information, please see our Cookie Notice and our Privacy "
-            "Policy . Get the Reddit app Scan this QR code to download the app now Or check it out in the app stores"
-        )
+            if len(payload) > 1:
+                comment_children = payload[1].get('data', {}).get('children', [])
+                for child in comment_children[:15]:
+                    body = child.get('data', {}).get('body')
+                    if body:
+                        pieces.append(str(body))
 
-        # Remove the unwanted text from page_text
-        page_text = page_text.replace(unwanted_text, "")
-        page_text = page_text.replace("'", "")
-        
-        # Return the cleaned text
-        return page_text
+        text = ' '.join(piece for piece in pieces if piece).replace("'", "")
+        return text if text else None
 
-    except Exception as e:
-        logging.error(f"Error in get_reddit_post for "+link)
+    except Exception as exc:
+        logging.error("Error in get_reddit_post for %s: %s", link, exc)
         return None
 
-    finally:
-        # Ensure the driver is properly closed
-        driver.quit()
-        logging.info("Browser closed.")
-        
+
 def get_news_links(stock):
     current_date = (datetime.now() - timedelta(2)).strftime("%Y-%m-%d")
-    url = config.newapi_url+config.newsapi_query+stock+config.newsapi_from+current_date+config.newapi_api+config.newsapi_key
-    response = requests.get(url)
+    url = config.newapi_url + config.newsapi_query + stock + config.newsapi_from + current_date + config.newapi_api + config.newsapi_key
+    response = requests.get(url, headers=REQUEST_HEADERS, timeout=15)
     data = json.loads(response.text)
-    articles = data['articles']
+    articles = data.get('articles', [])
     return articles
-        
+
+
 def get_news_post(link):
-    
     try:
-        # Initialize the driver and open the Reddit post link
-        driver = utils.get_driver()
-        driver.get(link)
-        time.sleep(config.var_sleep)
-        
-        # Parse the loaded page HTML with BeautifulSoup
-        soup = BeautifulSoup(driver.page_source, 'html.parser')
-
-        # Remove scripts, styles, and other non-content elements
-        for tag in soup(["script", "style", "header", "footer", "nav", "aside"]):
-            tag.decompose()  # Remove the element from the soup
-
-        # Extract all visible text as a single cleaned string
-        page_text = soup.get_text(separator=' ', strip=True)
-        
-        page_text = page_text.replace("'", "")
-        
-        # Return the cleaned text
-        return page_text
-
-    except Exception as e:
-        logging.error(f"Error in get_news_post for "+link)
+        response = _safe_request(link)
+        response.raise_for_status()
+        page_text = _extract_visible_text_from_html(response.text)
+        return page_text[:12000]
+    except Exception as exc:
+        logging.error("Error in get_news_post for %s: %s", link, exc)
         return None
 
-    finally:
-        # Ensure the driver is properly closed
-        driver.quit()
-        logging.info("Browser closed.")
 
 def get_annualreport(stock, filename):
-    
-    driver = utils.get_driver()
-
     try:
-        driver.get(config.annualreports+stock)
-        time.sleep(config.var_sleep)
+        response = _safe_request(config.annualreports + stock)
+        response.raise_for_status()
 
-        link_element = driver.find_element(By.XPATH, '/html/body/div[8]/section[1]/div[2]/ul/li[2]/span[1]/a')
-        link_element.click()
-        time.sleep(config.var_sleep)
+        # Try common annualreports.com archive PDF patterns.
+        matches = re.findall(r"https://www\\.annualreports\\.com/HostedData/[^\"']+\\.pdf", response.text, flags=re.IGNORECASE)
+        if not matches:
+            matches = re.findall(r"https://www\\.annualreports\\.com/Click/\\?[^\"']+", response.text, flags=re.IGNORECASE)
+        if not matches:
+            logging.error("Error in get_annualreport for %s", stock)
+            return False
 
-        #get the annual report
-        annualreport_element = driver.find_element(By.XPATH, '/html/body/div[8]/section/div[2]/div[2]/div[1]/div[2]/div[2]/a[1]')
-        annualreport_url = annualreport_element.get_attribute('data-uw-original-href')
-        annualreport_response = requests.get(annualreport_url)
-        if annualreport_response.status_code == 200:
-            with open(filename, "wb") as pdf_file:
-                pdf_file.write(annualreport_response.content)
-            flag = True
-        else:
-            flag = False
-        
-    except Exception as e:
-        logging.error(f"Error in get_annualreport for "+stock)
-        flag = False
+        annualreport_url = matches[0].replace('&amp;', '&')
+        annualreport_response = _safe_request(annualreport_url, timeout=30)
+        annualreport_response.raise_for_status()
+        with open(filename, "wb") as pdf_file:
+            pdf_file.write(annualreport_response.content)
+        return True
 
-    finally:
-        # Ensure the driver is properly closed
-        driver.quit()
-        logging.info("Browser closed.")
-        return flag
+    except Exception as exc:
+        logging.error("Error in get_annualreport for %s: %s", stock, exc)
+        return False

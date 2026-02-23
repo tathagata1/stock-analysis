@@ -1,9 +1,9 @@
 import json
-import technical_analysis
+import numpy as np
+
 import fundamental_analysis
 import sentiment_analysis
-from datetime import datetime
-import numpy as np
+import technical_analysis
 
 def apply_sentiment_analysis(stock):
     gpt_resp = []
@@ -50,25 +50,35 @@ def apply_fundamental_analysis(df_stats):
     ]
     return sum(modifiers)
 
-def get_prediction(df, stats):
+def get_prediction(df, stats, include_sentiment=True, include_fundamental=True):
 
     df = technical_analysis.get_technical_analysis_calculations(df)
     df['technical_analysis_buy_score'] = df.apply(apply_technical_analysis_buy, axis=1)      #0 to +1      
     df['technical_analysis_sell_score'] = df.apply(apply_technical_analysis_sell, axis=1)    #-1 to 0     
-    df['fundamental_analysis_score'] = apply_fundamental_analysis(stats)                     #-1 to +1      
+    df['fundamental_analysis_score'] = apply_fundamental_analysis(stats) if include_fundamental else 0  #-1 to +1      
     ticker = df["TICKER"].iloc[0]
-    df['sentiment_analysis_score'] = apply_sentiment_analysis(ticker)                 #-1 to +1            
-    
+    df['sentiment_analysis_score'] = apply_sentiment_analysis(ticker) if include_sentiment else 0  #-1 to +1
+
     return df
 
-def get_statsless_prediction(df):
+def get_statsless_prediction(df, include_sentiment=True):
 
     df = technical_analysis.get_technical_analysis_calculations(df)
     df['technical_analysis_buy_score'] = df.apply(apply_technical_analysis_buy, axis=1)            #0 to +1
     df['technical_analysis_sell_score'] = df.apply(apply_technical_analysis_sell, axis=1)          #-1 to 0
+    df['fundamental_analysis_score'] = 0
     ticker = df["TICKER"].iloc[0]
-    df['sentiment_analysis_score'] = apply_sentiment_analysis(ticker)                              #-1 to +1
+    df['sentiment_analysis_score'] = apply_sentiment_analysis(ticker) if include_sentiment else 0  #-1 to +1
 
+    return df
+
+def add_total_signal(df):
+    df['Signal'] = (
+        df['technical_analysis_buy_score']
+        + df['technical_analysis_sell_score']
+        + df.get('fundamental_analysis_score', 0)
+        + df.get('sentiment_analysis_score', 0)
+    )
     return df
 
 def convert_signal_to_text(df):

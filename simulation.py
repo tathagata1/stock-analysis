@@ -65,9 +65,13 @@ def simulate_exploratory_trading(file_to_sim_df, start_iloc, end_iloc, initial_f
     closing_price = sim_df['Close'].iloc[-1]  # Closing price of the last day
     unrealized_gains_losses = stock_units * closing_price  # Value of stocks held
     avg_price_per_unit = (total_cost / stock_units) if stock_units > 0 else 0
-    unrealised_gains_losses_percentage = (unrealized_gains_losses-(stock_units*avg_price_per_unit))/((stock_units*avg_price_per_unit))*100
-    if math.isnan(unrealised_gains_losses_percentage):
+    invested_value = stock_units * avg_price_per_unit
+    if invested_value == 0:
         unrealised_gains_losses_percentage = 0
+    else:
+        unrealised_gains_losses_percentage = (unrealized_gains_losses - invested_value) / invested_value * 100
+        if math.isnan(unrealised_gains_losses_percentage):
+            unrealised_gains_losses_percentage = 0
 
     return {
         "closing_stock_price": closing_price,
@@ -136,9 +140,13 @@ def simulate_portfolio_trades(file_to_sim_df, start_iloc, end_iloc, initial_fund
     closing_price = sim_df['Close'].iloc[-1]  # Closing price of the last day
     unrealized_gains_losses = stock_units * closing_price  # Value of stocks held
     avg_price_per_unit = (total_cost / stock_units) if stock_units > 0 else 0
-    unrealised_gains_losses_percentage = (unrealized_gains_losses-(stock_units*avg_price_per_unit))/((stock_units*avg_price_per_unit))*100
-    if math.isnan(unrealised_gains_losses_percentage):
+    invested_value = stock_units * avg_price_per_unit
+    if invested_value == 0:
         unrealised_gains_losses_percentage = 0
+    else:
+        unrealised_gains_losses_percentage = (unrealized_gains_losses - invested_value) / invested_value * 100
+        if math.isnan(unrealised_gains_losses_percentage):
+            unrealised_gains_losses_percentage = 0
 
     return {
         "closing_stock_price": closing_price,
