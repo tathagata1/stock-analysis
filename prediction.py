@@ -9,15 +9,13 @@ def apply_sentiment_analysis(stock):
     gpt_resp = []
     gpt_resp = sentiment_analysis.get_reddit_sentiment(stock, gpt_resp)
     gpt_resp = sentiment_analysis.get_news_sentiment(stock, gpt_resp)
-    
     try: 
         scores_with_high_confidence = [float(item["score"]) for item in (json.loads(data) for data in gpt_resp) if float(item["confidence"]) >= 0.90]
-
         if len(scores_with_high_confidence) > 0:
             average_score = sum(scores_with_high_confidence) / len(scores_with_high_confidence)
         else:
             average_score = 0
-    except:
+    except Exception as e:
         print("error in apply_sentiment_analysis")
         return 0
         

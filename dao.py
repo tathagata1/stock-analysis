@@ -98,7 +98,54 @@ def get_gpt_score_with_confidence(stock, post):
     try:
         os.environ['OPENAI_API_KEY'] = config.chatgpt_key
         client = OpenAI()
-        command='you need to analyse the following reddit post for '+stock+'. you need to respond in the format { "score": "VAR_X", "confidence": "VAR_Y" }. VAR_X can vary from -1.000 to +1.0000. VAR_Y will be your confidence on the buy/sell indication and will vary between 0.00 and 1.00. I do not need anything else other than { "score": "VAR_X", "confidence": "VAR_Y" }. Here is the text: '+post
+        #command='you need to analyse the following reddit post for '+stock+'. you need to respond in the format { "score": "VAR_X", "confidence": "VAR_Y" }. VAR_X can vary from -1.000 to +1.0000. VAR_Y will be your confidence on the buy/sell indication and will vary between 0.00 and 1.00. I do not need anything else other than { "score": "VAR_X", "confidence": "VAR_Y" }. Here is the text: '+post
+        command="""You are a financial sentiment and trading-signal analysis engine.
+                    Task:
+                    Analyse the following text about the stock:"""+stock+""".
+                    The text may come from news, social media, forums, blogs, or reports.
+                    Determine whether it indicates a bullish (buy), bearish (sell), or neutral signal.
+
+                    Scoring rules:
+                    - Return a sentiment score VAR_X between -1.000 and +1.000
+                        - -1.000 = extremely bearish / strong sell signal
+                        - -0.500 = moderately bearish
+                        -  0.000 = neutral / no clear signal
+                        - +0.500 = moderately bullish
+                        - +1.000 = extremely bullish / strong buy signal
+                    - Score must reflect ONLY the sentiment expressed in the provided text.
+
+                    Confidence rules:
+                    - Return VAR_Y between 0.00 and 1.00 indicating confidence in the signal.
+                    - Increase confidence when:
+                        - Clear directional opinion exists
+                        - Evidence, data, financials, catalysts, or concrete reasoning are present
+                    - Reduce confidence when:
+                        - Speculation, rumours, hype, or emotional language dominates
+                        - Sarcasm or ambiguity is present
+                        - Mixed signals appear
+                        - The text is short or lacks context
+
+                    Signal interpretation guidance:
+                    - Bullish indicators:
+                        earnings strength, upgrades, growth catalysts, strong guidance, accumulation
+                    - Bearish indicators:
+                        downgrades, weak outlook, regulatory risk, layoffs, missed earnings, dilution
+                    - Neutral:
+                        factual reporting without directional opinion
+
+                    Constraints:
+                    - Use only the provided text. Do NOT use external data or prior knowledge.
+                    - Ignore general market sentiment unless directly tied to the stock.
+                    - If the stock is mentioned but no investment signal is present → score = 0.000.
+                    - If the stock is not actually discussed → score = 0.000 and confidence ≤ 0.20.
+                    - Do NOT explain reasoning.
+                    - Output STRICTLY valid JSON only.
+                    - No text before or after the JSON.
+
+                    Output format (mandatory):
+                    { "score": VAR_X, "confidence": VAR_Y }
+
+                    Text to analyse:""" +post
         completion = client.chat.completions.create(
             model="gpt-5.1",
             messages=[
