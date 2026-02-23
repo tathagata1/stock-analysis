@@ -4,3 +4,4 @@ summaries/*
 __pycache__
 config.ini
 cache/*
+output/*
