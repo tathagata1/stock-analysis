@@ -4,30 +4,7 @@ config = configparser.ConfigParser()
 config.read('config.ini')
 
 path_data_dump=config['Misc']['data_dump_folder']
-path_static_folder=config['Misc']['static_folder']
-path_summaries_folder = config['Misc']['summaries_folder']
-var_sleep=int(config['Misc']['varSleep'])
-
-rapidapi_url=config['API']['rapidapi_url']
-rapidapi_key=config['API']['rapidapi_key']
-rapidapi_service=config['API']['rapidapi_service']
 chatgpt_key=config['API']['chatgpt_key']
-
-base_url=config['Selenium']['BaseUrl']
-history=config['Selenium']['History']
-stats=config['Selenium']['Stats']
-comments=config['Selenium']['Comments']
-stock_list=config['Selenium']['StockList']
-
-WeekGainers52=config['Selenium']['WeekGainers52']
-WeekLosers52=config['Selenium']['WeekLosers52']
-MostActive=config['Selenium']['MostActive']
-TrendingNow=config['Selenium']['TrendingNow']
-Gainers=config['Selenium']['Gainers']
-Losers=config['Selenium']['Losers']
-stock_list_appender = config['Selenium']['stock_list_appender']
-
-annualreports=config['Selenium']['annualreports']
 
 newsapi_key=config['API']['newsapi_key']
 newapi_url=config['Selenium']['newapi_url']
@@ -36,8 +13,6 @@ newsapi_from=config['Selenium']['newsapi_from']
 newapi_api=config['Selenium']['newapi_api']
 
 reddit_url=config['Selenium']['redditURL']
-reddit_param_1=config['Selenium']['redditParam1']
-reddit_param_2=config['Selenium']['redditParam2']
 
 sma1=int(config['SimpleMovingAverage']['SMA1'])
 sma2=int(config['SimpleMovingAverage']['SMA2'])

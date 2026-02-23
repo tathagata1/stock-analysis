@@ -106,7 +106,6 @@ def calculate_buy_score(row):
         score += 0.02
     return score
 
-
 def calculate_sell_score(row):
     score = 0
     if row['RSI'] > config.rsi_sell and row['SMA' + str(config.sma1)] < row['SMA' + str(config.sma2)]:

@@ -1,7 +1,6 @@
 import os
 import logging
 import json
-import re
 from datetime import datetime, timedelta
 from io import StringIO
 from urllib.parse import quote_plus
@@ -115,27 +114,6 @@ def get_gpt_score_with_confidence(stock, post):
     return completion.choices[0].message.content
 
 
-def get_gpt_misc(text, primer):
-    try:
-        os.environ['OPENAI_API_KEY'] = config.chatgpt_key
-        client = OpenAI()
-        completion = client.chat.completions.create(
-            model="gpt-5.1",
-            messages=[
-                {"role": "system", "content": primer},
-                {
-                    "role": "user",
-                    "content": text
-                }
-            ]
-        )
-    except Exception:
-        print("error in get_gpt_misc")
-        return 'unable to parse data'
-
-    return completion.choices[0].message.content
-
-
 def write_csv(file_name, tmp_data):
     if os.path.isfile(file_name):
         os.remove(file_name)
@@ -178,22 +156,6 @@ def get_index_constituents(index_name="sp500"):
 
     logging.error("Could not find ticker column %s for %s", source["column"], index_name)
     return []
-
-
-def get_yahoo_finance_stock_list(criteria, count=1):
-    criteria_lower = str(criteria).lower()
-    if "nasdaq" in criteria_lower or "trending" in criteria_lower:
-        base_list = get_index_constituents("nasdaq100")
-    elif "dow" in criteria_lower:
-        base_list = get_index_constituents("dow30")
-    else:
-        base_list = get_index_constituents("sp500")
-
-    try:
-        limit = int(count)
-    except Exception:
-        limit = len(base_list)
-    return base_list[:max(limit, 0)]
 
 
 def get_yahoo_finance_5y(var_stock):
@@ -306,28 +268,3 @@ def get_news_post(link):
     except Exception as exc:
         logging.error("Error in get_news_post for %s: %s", link, exc)
         return None
-
-
-def get_annualreport(stock, filename):
-    try:
-        response = _safe_request(config.annualreports + stock)
-        response.raise_for_status()
-
-        # Try common annualreports.com archive PDF patterns.
-        matches = re.findall(r"https://www\\.annualreports\\.com/HostedData/[^\"']+\\.pdf", response.text, flags=re.IGNORECASE)
-        if not matches:
-            matches = re.findall(r"https://www\\.annualreports\\.com/Click/\\?[^\"']+", response.text, flags=re.IGNORECASE)
-        if not matches:
-            logging.error("Error in get_annualreport for %s", stock)
-            return False
-
-        annualreport_url = matches[0].replace('&amp;', '&')
-        annualreport_response = _safe_request(annualreport_url, timeout=30)
-        annualreport_response.raise_for_status()
-        with open(filename, "wb") as pdf_file:
-            pdf_file.write(annualreport_response.content)
-        return True
-
-    except Exception as exc:
-        logging.error("Error in get_annualreport for %s: %s", stock, exc)
-        return False
