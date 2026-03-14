@@ -14,6 +14,20 @@ DEFAULT_SIGNAL_LOOKBACK_START = 1
 DEFAULT_SIGNAL_LOOKBACK_END = 30
 DEFAULT_CACHE_DIR = "cache"
 DEFAULT_INDEX_CACHE_MAX_AGE_HOURS = 24
+SIGNAL_TEXT_TO_NUMBER = {
+    "STRONG SELL": -2,
+    "WEAK SELL": -1,
+    "HOLD": 0,
+    "WEAK BUY": 1,
+    "STRONG BUY": 2,
+}
+SIGNAL_NUMBER_TO_TEXT = {value: key for key, value in SIGNAL_TEXT_TO_NUMBER.items()}
+TRADE_ALLOCATION_BY_SIGNAL = {
+    "STRONG BUY": 0.10,
+    "WEAK BUY": 0.05,
+    "WEAK SELL": 0.05,
+    "STRONG SELL": 0.10,
+}
 
 
 def _safe_float(value):
@@ -36,6 +50,27 @@ def _build_metrics_dict(cumulative_return, sharpe_ratio, sortino_ratio, max_draw
         "max_drawdown": max_drawdown,
         "calmar_ratio": calmar_ratio,
     }
+
+
+def _normalize_signal_text(signal_text):
+    return str(signal_text).strip().upper()
+
+
+def _signal_number_to_text(signal_number):
+    try:
+        normalized_number = int(round(float(signal_number)))
+    except Exception:
+        normalized_number = 0
+    normalized_number = max(-2, min(2, normalized_number))
+    return SIGNAL_NUMBER_TO_TEXT[normalized_number]
+
+
+def _average_open_close(open_price, close_price):
+    open_value = _safe_float(open_price)
+    close_value = _safe_float(close_price)
+    if open_value is None or close_value is None:
+        return None
+    return (open_value + close_value) / 2
 
 
 def current_run_date():
@@ -196,6 +231,7 @@ def get_price_history(df_pred):
     history['Open'] = pd.to_numeric(history['Open'], errors='coerce')
     history['Close'] = pd.to_numeric(history['Close'], errors='coerce')
     history = history.dropna(subset=['Date', 'Open', 'Close']).sort_values('Date').reset_index(drop=True)
+    history['Trade_Price'] = (history['Open'] + history['Close']) / 2
     return history
 
 
@@ -240,7 +276,7 @@ def build_manual_position_analysis(df_pred, buy_date, units=1.0):
     if open_price is None or close_price is None:
         raise ValueError("Open and Close prices must be available on the resolved buy date")
 
-    buy_price_value = (open_price + close_price) / 2
+    buy_price_value = _average_open_close(open_price, close_price)
 
     units_value = _safe_float(units)
     if units_value is None or units_value < 0:
@@ -283,6 +319,394 @@ def build_manual_position_analysis(df_pred, buy_date, units=1.0):
         "price_history": history,
         "buy_lookup": buy_lookup,
         "buy_marker": buy_marker,
+        "summary": summary,
+    }
+
+
+def build_index_daily_signal_frame(index_workflow_result, start_date=None, end_date=None):
+    signal_rows = []
+    analyses = index_workflow_result.get("analyses", {})
+
+    for ticker, analysis in analyses.items():
+        df_pred = analysis.get("df_pred")
+        if df_pred is None or df_pred.empty:
+            continue
+
+        frame = df_pred[['Date', 'Signal_Text']].copy()
+        frame['Date'] = pd.to_datetime(frame['Date']).dt.tz_localize(None).dt.normalize()
+        frame['Signal_Text'] = frame['Signal_Text'].map(_normalize_signal_text)
+        frame['signal_number'] = frame['Signal_Text'].map(SIGNAL_TEXT_TO_NUMBER)
+        frame['TICKER'] = ticker
+        frame = frame.dropna(subset=['Date', 'signal_number'])
+        signal_rows.append(frame[['Date', 'TICKER', 'Signal_Text', 'signal_number']])
+
+    if not signal_rows:
+        return pd.DataFrame(
+            columns=[
+                'Date',
+                'constituents',
+                'avg_signal_number',
+                'signal_number',
+                'signal_text',
+                'strong_sell_count',
+                'weak_sell_count',
+                'hold_count',
+                'weak_buy_count',
+                'strong_buy_count',
+            ]
+        )
+
+    combined = pd.concat(signal_rows, ignore_index=True)
+
+    if start_date is not None:
+        combined = combined[combined['Date'] >= pd.to_datetime(start_date).normalize()]
+    if end_date is not None:
+        combined = combined[combined['Date'] <= pd.to_datetime(end_date).normalize()]
+
+    if combined.empty:
+        return pd.DataFrame(
+            columns=[
+                'Date',
+                'constituents',
+                'avg_signal_number',
+                'signal_number',
+                'signal_text',
+                'strong_sell_count',
+                'weak_sell_count',
+                'hold_count',
+                'weak_buy_count',
+                'strong_buy_count',
+            ]
+        )
+
+    grouped = combined.groupby('Date')
+    summary = grouped.agg(
+        constituents=('TICKER', 'nunique'),
+        avg_signal_number=('signal_number', 'mean'),
+    ).reset_index()
+
+    for signal_text in SIGNAL_TEXT_TO_NUMBER:
+        column_name = signal_text.lower().replace(' ', '_') + '_count'
+        counts = (
+            combined.assign(is_match=combined['Signal_Text'] == signal_text)
+            .groupby('Date')['is_match']
+            .sum()
+            .reset_index(name=column_name)
+        )
+        summary = summary.merge(counts, on='Date', how='left')
+
+    count_columns = [column for column in summary.columns if column.endswith('_count')]
+    summary[count_columns] = summary[count_columns].fillna(0).astype(int)
+    summary['signal_number'] = summary['avg_signal_number'].round().clip(-2, 2).astype(int)
+    summary['signal_text'] = summary['signal_number'].map(_signal_number_to_text)
+    return summary.sort_values('Date').reset_index(drop=True)
+
+
+def simulate_manual_position_with_index_signals(df_pred, buy_date, units, initial_funds, index_daily_signal_frame):
+    price_history = get_price_history(df_pred)
+    if price_history.empty:
+        raise ValueError("Price history is empty")
+
+    buy_lookup = resolve_buy_date(price_history, buy_date)
+    resolved_buy_date = pd.to_datetime(buy_lookup["resolved_buy_date"]).normalize()
+    simulation_frame = price_history.copy()
+    simulation_frame['Date'] = pd.to_datetime(simulation_frame['Date']).dt.normalize()
+    simulation_frame = simulation_frame[simulation_frame['Date'] >= resolved_buy_date].copy()
+
+    if simulation_frame.empty:
+        raise ValueError("No price history is available on or after the resolved buy date")
+
+    if index_daily_signal_frame is None or index_daily_signal_frame.empty:
+        raise ValueError("index_daily_signal_frame is empty")
+
+    index_signals = index_daily_signal_frame.copy()
+    index_signals['Date'] = pd.to_datetime(index_signals['Date']).dt.normalize()
+    simulation_frame = simulation_frame.merge(
+        index_signals[['Date', 'signal_text', 'signal_number', 'avg_signal_number', 'constituents']],
+        on='Date',
+        how='left',
+    )
+    simulation_frame['signal_text'] = simulation_frame['signal_text'].fillna('HOLD')
+    simulation_frame['signal_number'] = simulation_frame['signal_number'].fillna(0).astype(int)
+    simulation_frame['avg_signal_number'] = simulation_frame['avg_signal_number'].fillna(0.0)
+    simulation_frame['constituents'] = simulation_frame['constituents'].fillna(0).astype(int)
+
+    initial_units = _safe_float(units)
+    if initial_units is None or initial_units < 0:
+        raise ValueError("units must be zero or a positive number")
+
+    starting_cash = _safe_float(initial_funds)
+    if starting_cash is None or starting_cash < 0:
+        raise ValueError("initial_funds must be zero or a positive number")
+
+    first_row = simulation_frame.iloc[0]
+    initial_buy_price = _average_open_close(first_row['Open'], first_row['Close'])
+    initial_cost = initial_units * initial_buy_price
+    if initial_cost > starting_cash:
+        raise ValueError("initial_funds is lower than the cost of the initial holdings")
+
+    cash_balance = starting_cash - initial_cost
+    stock_units = initial_units
+    total_cost = initial_cost
+    transactions = []
+    daily_rows = []
+
+    if initial_units > 0:
+        transactions.append({
+            "Date": first_row['Date'],
+            "action": "BUY",
+            "reason": "INITIAL POSITION",
+            "signal_text": "INITIAL BUY",
+            "trade_price": initial_buy_price,
+            "units": initial_units,
+            "cash_balance": cash_balance,
+            "units_held": stock_units,
+        })
+
+    initial_holdings_value = stock_units * first_row['Close']
+    initial_portfolio_value = cash_balance + initial_holdings_value
+    daily_rows.append({
+        "Date": first_row['Date'],
+        "Open": first_row['Open'],
+        "Close": first_row['Close'],
+        "Trade_Price": initial_buy_price,
+        "signal_text": first_row['signal_text'],
+        "signal_number": first_row['signal_number'],
+        "avg_signal_number": first_row['avg_signal_number'],
+        "constituents": first_row['constituents'],
+        "action": "BUY" if initial_units > 0 else "HOLD",
+        "trade_units": initial_units,
+        "cash_balance": cash_balance,
+        "units_held": stock_units,
+        "average_cost_per_unit": (total_cost / stock_units) if stock_units > 0 else 0,
+        "holdings_value": initial_holdings_value,
+        "portfolio_value": initial_portfolio_value,
+    })
+
+    for _, row in simulation_frame.iloc[1:].iterrows():
+        trade_price = _average_open_close(row['Open'], row['Close'])
+        signal_text = _normalize_signal_text(row['signal_text'])
+        action = "HOLD"
+        trade_units = 0.0
+
+        if signal_text in ("WEAK BUY", "STRONG BUY") and trade_price:
+            allocation = cash_balance * TRADE_ALLOCATION_BY_SIGNAL[signal_text]
+            if allocation > 0:
+                trade_units = allocation / trade_price
+                cash_balance -= allocation
+                stock_units += trade_units
+                total_cost += allocation
+                action = "BUY"
+        elif signal_text in ("WEAK SELL", "STRONG SELL") and trade_price:
+            trade_units = stock_units * TRADE_ALLOCATION_BY_SIGNAL[signal_text]
+            if trade_units > 0:
+                average_cost_before_sale = (total_cost / stock_units) if stock_units > 0 else 0
+                proceeds = trade_units * trade_price
+                cash_balance += proceeds
+                stock_units -= trade_units
+                total_cost -= average_cost_before_sale * trade_units
+                total_cost = max(total_cost, 0)
+                action = "SELL"
+
+        holdings_value = stock_units * row['Close']
+        portfolio_value = cash_balance + holdings_value
+        average_cost_per_unit = (total_cost / stock_units) if stock_units > 0 else 0
+
+        daily_rows.append({
+            "Date": row['Date'],
+            "Open": row['Open'],
+            "Close": row['Close'],
+            "Trade_Price": trade_price,
+            "signal_text": signal_text,
+            "signal_number": row['signal_number'],
+            "avg_signal_number": row['avg_signal_number'],
+            "constituents": row['constituents'],
+            "action": action,
+            "trade_units": trade_units,
+            "cash_balance": cash_balance,
+            "units_held": stock_units,
+            "average_cost_per_unit": average_cost_per_unit,
+            "holdings_value": holdings_value,
+            "portfolio_value": portfolio_value,
+        })
+
+        if action in ("BUY", "SELL"):
+            transactions.append({
+                "Date": row['Date'],
+                "action": action,
+                "reason": "INDEX SIGNAL",
+                "signal_text": signal_text,
+                "trade_price": trade_price,
+                "units": trade_units,
+                "cash_balance": cash_balance,
+                "units_held": stock_units,
+            })
+
+    daily_history = pd.DataFrame(daily_rows)
+    transactions_frame = pd.DataFrame(transactions)
+
+    latest_row = daily_history.iloc[-1]
+    total_portfolio_value = latest_row['portfolio_value']
+    profit_loss = total_portfolio_value - starting_cash
+    profit_loss_pct = (profit_loss / starting_cash * 100) if starting_cash else None
+
+    summary = pd.DataFrame([{
+        "requested_buy_date": buy_lookup["requested_buy_date"],
+        "resolved_buy_date": buy_lookup["resolved_buy_date"],
+        "buy_date_resolution": buy_lookup["buy_date_resolution"],
+        "initial_funds": starting_cash,
+        "initial_buy_price": initial_buy_price,
+        "initial_units": initial_units,
+        "ending_cash_balance": latest_row['cash_balance'],
+        "units_held": latest_row['units_held'],
+        "average_cost_per_unit": latest_row['average_cost_per_unit'],
+        "latest_close": latest_row['Close'],
+        "holdings_value": latest_row['holdings_value'],
+        "total_portfolio_value": total_portfolio_value,
+        "profit_loss": profit_loss,
+        "profit_loss_pct": profit_loss_pct,
+        "buy_transactions": int((transactions_frame['action'] == 'BUY').sum()) if not transactions_frame.empty else 0,
+        "sell_transactions": int((transactions_frame['action'] == 'SELL').sum()) if not transactions_frame.empty else 0,
+    }])
+
+    return {
+        "buy_lookup": buy_lookup,
+        "price_history": price_history,
+        "index_daily_signal": index_signals.sort_values('Date').reset_index(drop=True),
+        "daily_history": daily_history,
+        "transactions": transactions_frame,
+        "summary": summary,
+    }
+
+
+def simulate_index_signal_strategy(df_pred, initial_funds, index_daily_signal_frame):
+    price_history = get_price_history(df_pred)
+    if price_history.empty:
+        raise ValueError("Price history is empty")
+
+    starting_cash = _safe_float(initial_funds)
+    if starting_cash is None or starting_cash < 0:
+        raise ValueError("initial_funds must be zero or a positive number")
+
+    if index_daily_signal_frame is None or index_daily_signal_frame.empty:
+        raise ValueError("index_daily_signal_frame is empty")
+
+    simulation_frame = price_history.copy()
+    simulation_frame['Date'] = pd.to_datetime(simulation_frame['Date']).dt.normalize()
+
+    index_signals = index_daily_signal_frame.copy()
+    index_signals['Date'] = pd.to_datetime(index_signals['Date']).dt.normalize()
+
+    simulation_frame = simulation_frame.merge(
+        index_signals[['Date', 'signal_text', 'signal_number', 'avg_signal_number', 'constituents']],
+        on='Date',
+        how='left',
+    )
+    simulation_frame['signal_text'] = simulation_frame['signal_text'].fillna('HOLD')
+    simulation_frame['signal_number'] = simulation_frame['signal_number'].fillna(0).astype(int)
+    simulation_frame['avg_signal_number'] = simulation_frame['avg_signal_number'].fillna(0.0)
+    simulation_frame['constituents'] = simulation_frame['constituents'].fillna(0).astype(int)
+
+    cash_balance = starting_cash
+    stock_units = 0.0
+    total_cost = 0.0
+    transactions = []
+    daily_rows = []
+
+    for _, row in simulation_frame.iterrows():
+        trade_price = _average_open_close(row['Open'], row['Close'])
+        signal_text = _normalize_signal_text(row['signal_text'])
+        action = "HOLD"
+        trade_units = 0.0
+        trade_value = 0.0
+
+        if signal_text in ("WEAK BUY", "STRONG BUY") and trade_price:
+            target_trade_value = starting_cash * TRADE_ALLOCATION_BY_SIGNAL[signal_text]
+            trade_value = min(target_trade_value, cash_balance)
+            if trade_value > 0:
+                trade_units = trade_value / trade_price
+                cash_balance -= trade_value
+                stock_units += trade_units
+                total_cost += trade_value
+                action = "BUY"
+        elif signal_text in ("WEAK SELL", "STRONG SELL") and trade_price and stock_units > 0:
+            trade_units = stock_units * TRADE_ALLOCATION_BY_SIGNAL[signal_text]
+            trade_units = min(trade_units, stock_units)
+            trade_value = trade_units * trade_price
+            if trade_units > 0 and trade_value > 0:
+                average_cost_before_sale = (total_cost / stock_units) if stock_units > 0 else 0
+                cash_balance += trade_value
+                stock_units -= trade_units
+                total_cost -= average_cost_before_sale * trade_units
+                total_cost = max(total_cost, 0.0)
+                stock_units = max(stock_units, 0.0)
+                action = "SELL"
+
+        holdings_value = stock_units * row['Close']
+        portfolio_value = cash_balance + holdings_value
+        average_cost_per_unit = (total_cost / stock_units) if stock_units > 0 else 0.0
+        profit_loss = portfolio_value - starting_cash
+        profit_loss_pct = (profit_loss / starting_cash * 100) if starting_cash else None
+
+        daily_rows.append({
+            "Date": row['Date'],
+            "Open": row['Open'],
+            "Close": row['Close'],
+            "Trade_Price": trade_price,
+            "signal_text": signal_text,
+            "signal_number": row['signal_number'],
+            "avg_signal_number": row['avg_signal_number'],
+            "constituents": row['constituents'],
+            "action": action,
+            "trade_units": trade_units,
+            "trade_value": trade_value,
+            "cash_balance": cash_balance,
+            "units_held": stock_units,
+            "average_cost_per_unit": average_cost_per_unit,
+            "holdings_value": holdings_value,
+            "portfolio_value": portfolio_value,
+            "profit_loss": profit_loss,
+            "profit_loss_pct": profit_loss_pct,
+        })
+
+        if action in ("BUY", "SELL"):
+            transactions.append({
+                "Date": row['Date'],
+                "action": action,
+                "signal_text": signal_text,
+                "trade_price": trade_price,
+                "units": trade_units,
+                "trade_value": trade_value,
+                "cash_balance": cash_balance,
+                "units_held": stock_units,
+                "portfolio_value": portfolio_value,
+            })
+
+    daily_history = pd.DataFrame(daily_rows)
+    transactions_frame = pd.DataFrame(transactions)
+
+    latest_row = daily_history.iloc[-1]
+    summary = pd.DataFrame([{
+        "start_date": daily_history.iloc[0]['Date'],
+        "end_date": latest_row['Date'],
+        "initial_funds": starting_cash,
+        "ending_cash_balance": latest_row['cash_balance'],
+        "units_held": latest_row['units_held'],
+        "average_cost_per_unit": latest_row['average_cost_per_unit'],
+        "latest_close": latest_row['Close'],
+        "holdings_value": latest_row['holdings_value'],
+        "total_portfolio_value": latest_row['portfolio_value'],
+        "profit_loss": latest_row['profit_loss'],
+        "profit_loss_pct": latest_row['profit_loss_pct'],
+        "buy_transactions": int((transactions_frame['action'] == 'BUY').sum()) if not transactions_frame.empty else 0,
+        "sell_transactions": int((transactions_frame['action'] == 'SELL').sum()) if not transactions_frame.empty else 0,
+    }])
+
+    return {
+        "price_history": price_history,
+        "index_daily_signal": index_signals.sort_values('Date').reset_index(drop=True),
+        "daily_history": daily_history,
+        "transactions": transactions_frame,
         "summary": summary,
     }
 
