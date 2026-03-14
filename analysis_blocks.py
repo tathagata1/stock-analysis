@@ -191,10 +191,11 @@ def build_prediction_summary_row(stock_analysis, run_date=None):
 
 
 def get_price_history(df_pred):
-    history = df_pred[['Date', 'Close']].copy()
+    history = df_pred[['Date', 'Open', 'Close']].copy()
     history['Date'] = pd.to_datetime(history['Date']).dt.tz_localize(None)
+    history['Open'] = pd.to_numeric(history['Open'], errors='coerce')
     history['Close'] = pd.to_numeric(history['Close'], errors='coerce')
-    history = history.dropna(subset=['Date', 'Close']).sort_values('Date').reset_index(drop=True)
+    history = history.dropna(subset=['Date', 'Open', 'Close']).sort_values('Date').reset_index(drop=True)
     return history
 
 
@@ -224,18 +225,22 @@ def resolve_buy_date(price_history, buy_date):
     return {
         "requested_buy_date": requested_date,
         "resolved_buy_date": matched_row['Date'],
+        "reference_open_on_resolved_date": _safe_float(matched_row['Open']),
         "reference_close_on_resolved_date": _safe_float(matched_row['Close']),
         "buy_date_resolution": resolution,
     }
 
 
-def build_manual_position_analysis(df_pred, buy_date, buy_price, units=1.0):
+def build_manual_position_analysis(df_pred, buy_date, units=1.0):
     history = get_price_history(df_pred)
     buy_lookup = resolve_buy_date(history, buy_date)
 
-    buy_price_value = _safe_float(buy_price)
-    if buy_price_value is None or buy_price_value <= 0:
-        raise ValueError("buy_price must be a positive number")
+    open_price = buy_lookup["reference_open_on_resolved_date"]
+    close_price = buy_lookup["reference_close_on_resolved_date"]
+    if open_price is None or close_price is None:
+        raise ValueError("Open and Close prices must be available on the resolved buy date")
+
+    buy_price_value = (open_price + close_price) / 2
 
     units_value = _safe_float(units)
     if units_value is None or units_value < 0:
@@ -254,6 +259,7 @@ def build_manual_position_analysis(df_pred, buy_date, buy_price, units=1.0):
         "requested_buy_date": buy_lookup["requested_buy_date"],
         "resolved_buy_date": buy_lookup["resolved_buy_date"],
         "buy_date_resolution": buy_lookup["buy_date_resolution"],
+        "reference_open_on_resolved_date": open_price,
         "buy_price": buy_price_value,
         "reference_close_on_resolved_date": buy_lookup["reference_close_on_resolved_date"],
         "units": units_value,
@@ -270,6 +276,7 @@ def build_manual_position_analysis(df_pred, buy_date, buy_price, units=1.0):
         "Close": buy_price_value,
         "requested_buy_date": buy_lookup["requested_buy_date"],
         "buy_date_resolution": buy_lookup["buy_date_resolution"],
+        "buy_price_method": "average_of_open_and_close",
     }])
 
     return {
