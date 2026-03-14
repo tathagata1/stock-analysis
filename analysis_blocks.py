@@ -190,6 +190,96 @@ def build_prediction_summary_row(stock_analysis, run_date=None):
     }
 
 
+def get_price_history(df_pred):
+    history = df_pred[['Date', 'Close']].copy()
+    history['Date'] = pd.to_datetime(history['Date']).dt.tz_localize(None)
+    history['Close'] = pd.to_numeric(history['Close'], errors='coerce')
+    history = history.dropna(subset=['Date', 'Close']).sort_values('Date').reset_index(drop=True)
+    return history
+
+
+def resolve_buy_date(price_history, buy_date):
+    if price_history.empty:
+        raise ValueError("Price history is empty")
+
+    requested_date = pd.to_datetime(buy_date).normalize()
+    normalized_dates = price_history['Date'].dt.normalize()
+
+    exact_match = price_history.loc[normalized_dates == requested_date]
+    if not exact_match.empty:
+        matched_row = exact_match.iloc[0]
+        resolution = "exact"
+    else:
+        next_trading_day = price_history.loc[normalized_dates > requested_date]
+        if not next_trading_day.empty:
+            matched_row = next_trading_day.iloc[0]
+            resolution = "next_trading_day"
+        else:
+            previous_trading_day = price_history.loc[normalized_dates < requested_date]
+            if previous_trading_day.empty:
+                raise ValueError(f"Buy date {buy_date} is earlier than the available price history")
+            matched_row = previous_trading_day.iloc[-1]
+            resolution = "previous_trading_day"
+
+    return {
+        "requested_buy_date": requested_date,
+        "resolved_buy_date": matched_row['Date'],
+        "reference_close_on_resolved_date": _safe_float(matched_row['Close']),
+        "buy_date_resolution": resolution,
+    }
+
+
+def build_manual_position_analysis(df_pred, buy_date, buy_price, units=1.0):
+    history = get_price_history(df_pred)
+    buy_lookup = resolve_buy_date(history, buy_date)
+
+    buy_price_value = _safe_float(buy_price)
+    if buy_price_value is None or buy_price_value <= 0:
+        raise ValueError("buy_price must be a positive number")
+
+    units_value = _safe_float(units)
+    if units_value is None or units_value < 0:
+        raise ValueError("units must be zero or a positive number")
+
+    latest_row = history.iloc[-1]
+    latest_close = _safe_float(latest_row['Close'])
+    cost_basis = buy_price_value * units_value
+    market_value = None if latest_close is None else latest_close * units_value
+    pnl = None if market_value is None else market_value - cost_basis
+    pnl_pct = None
+    if cost_basis:
+        pnl_pct = (pnl / cost_basis) * 100 if pnl is not None else None
+
+    summary = pd.DataFrame([{
+        "requested_buy_date": buy_lookup["requested_buy_date"],
+        "resolved_buy_date": buy_lookup["resolved_buy_date"],
+        "buy_date_resolution": buy_lookup["buy_date_resolution"],
+        "buy_price": buy_price_value,
+        "reference_close_on_resolved_date": buy_lookup["reference_close_on_resolved_date"],
+        "units": units_value,
+        "latest_close": latest_close,
+        "latest_date": latest_row['Date'],
+        "cost_basis": cost_basis,
+        "market_value": market_value,
+        "pnl": pnl,
+        "pnl_pct": pnl_pct,
+    }])
+
+    buy_marker = pd.DataFrame([{
+        "Date": buy_lookup["resolved_buy_date"],
+        "Close": buy_price_value,
+        "requested_buy_date": buy_lookup["requested_buy_date"],
+        "buy_date_resolution": buy_lookup["buy_date_resolution"],
+    }])
+
+    return {
+        "price_history": history,
+        "buy_lookup": buy_lookup,
+        "buy_marker": buy_marker,
+        "summary": summary,
+    }
+
+
 def exploratory_simulation_from_prediction(df_pred, initial_funds=1000, start_iloc=1, end_iloc=31):
     sim_input = df_pred[['High', 'Low', 'Close', 'Date', 'TICKER', 'Signal_Text']].copy()
     return simulation.simulate_exploratory_trading(sim_input, start_iloc, end_iloc, initial_funds)

@@ -5,6 +5,9 @@ import fundamental_analysis
 import sentiment_analysis
 import technical_analysis
 
+TECHNICAL_SIGNAL_WEIGHT = 0.70
+SENTIMENT_SIGNAL_WEIGHT = 0.30
+
 def apply_sentiment_analysis(stock):
     gpt_resp = []
     gpt_resp = sentiment_analysis.get_reddit_sentiment(stock, gpt_resp)
@@ -70,11 +73,13 @@ def get_statsless_prediction(df, include_sentiment=True):
     return df
 
 def add_total_signal(df):
+    technical_signal = df['technical_analysis_buy_score'] + df['technical_analysis_sell_score']
+    sentiment_signal = df.get('sentiment_analysis_score', 0)
+
     df['Signal'] = (
-        df['technical_analysis_buy_score']
-        + df['technical_analysis_sell_score']
+        (technical_signal * TECHNICAL_SIGNAL_WEIGHT)
+        + (sentiment_signal * SENTIMENT_SIGNAL_WEIGHT)
         + df.get('fundamental_analysis_score', 0)
-        + df.get('sentiment_analysis_score', 0)
     )
     return df
 
