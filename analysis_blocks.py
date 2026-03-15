@@ -2,9 +2,9 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
-import backtesting
 import dao
 import prediction
 import simulation
@@ -71,6 +71,102 @@ def _average_open_close(open_price, close_price):
     if open_value is None or close_value is None:
         return None
     return (open_value + close_value) / 2
+
+
+def _calculate_sharpe_ratio(daily_returns, risk_free_rate=0):
+    if len(daily_returns) < 2 or np.std(daily_returns) == 0:
+        return np.nan
+    return (np.mean(daily_returns - risk_free_rate) / np.std(daily_returns)) * np.sqrt(252)
+
+
+def _calculate_sortino_ratio(daily_returns, risk_free_rate=0):
+    negative_returns = daily_returns[daily_returns < 0]
+    downside_deviation = np.std(negative_returns)
+    if len(daily_returns) < 2 or downside_deviation == 0:
+        return np.nan
+    return (np.mean(daily_returns - risk_free_rate) / downside_deviation) * np.sqrt(252)
+
+
+def _calculate_max_drawdown(cumulative_returns):
+    if cumulative_returns.empty:
+        return np.nan
+    drawdown = cumulative_returns - cumulative_returns.cummax()
+    return drawdown.min()
+
+
+def _calculate_calmar_ratio(cumulative_returns):
+    if cumulative_returns.empty:
+        return np.nan
+    max_drawdown = _calculate_max_drawdown(cumulative_returns)
+    annual_return = cumulative_returns.iloc[-1]
+    return annual_return / abs(max_drawdown) if max_drawdown != 0 else np.nan
+
+
+def _interpret_cumulative_return(value):
+    if value > 0.5:
+        return "Positive: Excellent"
+    if value > 0:
+        return "Positive: Good"
+    return "Negative: Poor"
+
+
+def _interpret_sharpe_ratio(value):
+    if value > 2:
+        return "Positive: Excellent"
+    if value > 1:
+        return "Positive: Good"
+    if value > 0:
+        return "Positive: Bad"
+    return "Negative: Poor"
+
+
+def _interpret_sortino_ratio(value):
+    if value > 2:
+        return "Positive: Excellent"
+    if value > 1:
+        return "Positive: Good"
+    if value > 0:
+        return "Negative: Poor"
+    return "Negative: Unacceptable"
+
+
+def _interpret_max_drawdown(value):
+    if value > -0.1:
+        return "Positive: Excellent"
+    if value > -0.2:
+        return "Positive: Good"
+    return "Negative: Poor"
+
+
+def _interpret_calmar_ratio(value):
+    if value > 3:
+        return "Positive: Excellent "
+    if value > 1:
+        return "Positive: Good"
+    if value > 0:
+        return "Positive: Acceptable"
+    return "Negative: Poor"
+
+
+def _backtest_prediction_frame(df):
+    df = df.copy()
+    df['Backtest_Strategy_Return'] = df['Daily_Return'] * df['Signal'].shift(1)
+    df['Backtest_Cumulative_Strategy_Return'] = (1 + df['Backtest_Strategy_Return']).cumprod() - 1
+
+    cumulative_return = df['Backtest_Cumulative_Strategy_Return'].iloc[-1] if not df.empty else np.nan
+    sharpe_ratio = _calculate_sharpe_ratio(df['Backtest_Strategy_Return'])
+    sortino_ratio = _calculate_sortino_ratio(df['Backtest_Strategy_Return'])
+    max_drawdown = _calculate_max_drawdown(df['Backtest_Cumulative_Strategy_Return'])
+    calmar_ratio = _calculate_calmar_ratio(df['Backtest_Cumulative_Strategy_Return'])
+
+    metrics = _build_metrics_dict(
+        _interpret_cumulative_return(cumulative_return),
+        _interpret_sharpe_ratio(sharpe_ratio),
+        _interpret_sortino_ratio(sortino_ratio),
+        _interpret_max_drawdown(max_drawdown),
+        _interpret_calmar_ratio(calmar_ratio),
+    )
+    return df, metrics
 
 
 def current_run_date():
@@ -152,23 +248,19 @@ def get_index_tickers(index_name="sp500", limit=None):
     return tickers[:limit]
 
 
-def build_prediction_frame(ticker, include_sentiment=False, include_fundamentals=True):
+def build_prediction_frame(ticker, include_sentiment=False):
     df_5y = pd.DataFrame(dao.get_yahoo_finance_5y(ticker))
     if df_5y.empty:
         raise ValueError(f"No history returned for {ticker}")
 
     stats_row = None
-    if include_fundamentals:
-        df_stats = pd.DataFrame(dao.get_yahoo_finance_key_stats(ticker))
-        stats_row = df_stats.iloc[0]
-        df_pred = prediction.get_prediction(
-            df_5y,
-            stats_row,
-            include_sentiment=include_sentiment,
-            include_fundamental=True,
-        )
-    else:
-        df_pred = prediction.get_statsless_prediction(df_5y, include_sentiment=include_sentiment)
+    df_stats = pd.DataFrame(dao.get_yahoo_finance_key_stats(ticker))
+    stats_row = df_stats.iloc[0]
+    df_pred = prediction.get_prediction(
+        df_5y,
+        stats_row,
+        include_sentiment=include_sentiment
+    )
 
     df_pred = prediction.add_total_signal(df_pred)
     df_pred = prediction.convert_signal_to_text(df_pred)
@@ -176,9 +268,7 @@ def build_prediction_frame(ticker, include_sentiment=False, include_fundamentals
 
 
 def backtest_prediction_frame(df_pred):
-    df_tested, cumulative_return, sharpe_ratio, sortino_ratio, max_drawdown, calmar_ratio = backtesting.backtest(df_pred.copy())
-    metrics = _build_metrics_dict(cumulative_return, sharpe_ratio, sortino_ratio, max_drawdown, calmar_ratio)
-    return df_tested, metrics
+    return _backtest_prediction_frame(df_pred)
 
 
 def get_recent_weighted_signal(df_tested, start_iloc=DEFAULT_SIGNAL_LOOKBACK_START, end_iloc=DEFAULT_SIGNAL_LOOKBACK_END):
@@ -191,11 +281,10 @@ def get_recent_weighted_signal(df_tested, start_iloc=DEFAULT_SIGNAL_LOOKBACK_STA
     }
 
 
-def build_stock_analysis(ticker, include_sentiment=False, include_fundamentals=True):
+def build_stock_analysis(ticker, include_sentiment=False):
     df_pred, stats_row = build_prediction_frame(
         ticker,
-        include_sentiment=include_sentiment,
-        include_fundamentals=include_fundamentals,
+        include_sentiment=include_sentiment
     )
     df_tested, metrics = backtest_prediction_frame(df_pred)
     recent_signal = get_recent_weighted_signal(df_tested)
@@ -276,7 +365,7 @@ def build_manual_position_analysis(df_pred, buy_date, units=1.0):
     if open_price is None or close_price is None:
         raise ValueError("Open and Close prices must be available on the resolved buy date")
 
-    buy_price_value = _average_open_close(open_price, close_price)
+    
 
     units_value = _safe_float(units)
     if units_value is None or units_value < 0:
@@ -284,6 +373,7 @@ def build_manual_position_analysis(df_pred, buy_date, units=1.0):
 
     latest_row = history.iloc[-1]
     latest_close = _safe_float(latest_row['Close'])
+    buy_price_value = _average_open_close(open_price, close_price)
     cost_basis = buy_price_value * units_value
     market_value = None if latest_close is None else latest_close * units_value
     pnl = None if market_value is None else market_value - cost_basis
@@ -711,6 +801,128 @@ def simulate_index_signal_strategy(df_pred, initial_funds, index_daily_signal_fr
     }
 
 
+def simulate_prediction_signal_strategy(df_pred, initial_funds):
+    price_history = get_price_history(df_pred)
+    if price_history.empty:
+        raise ValueError("Price history is empty")
+
+    starting_cash = _safe_float(initial_funds)
+    if starting_cash is None or starting_cash < 0:
+        raise ValueError("initial_funds must be zero or a positive number")
+
+    signal_history = df_pred[['Date', 'Signal_Text']].copy()
+    signal_history['Date'] = pd.to_datetime(signal_history['Date']).dt.tz_localize(None).dt.normalize()
+    signal_history['signal_text'] = signal_history['Signal_Text'].map(_normalize_signal_text)
+    signal_history['signal_number'] = signal_history['signal_text'].map(SIGNAL_TEXT_TO_NUMBER).fillna(0).astype(int)
+    signal_history = signal_history[['Date', 'signal_text', 'signal_number']]
+
+    simulation_frame = price_history.copy()
+    simulation_frame['Date'] = pd.to_datetime(simulation_frame['Date']).dt.normalize()
+    simulation_frame = simulation_frame.merge(signal_history, on='Date', how='left')
+    simulation_frame['signal_text'] = simulation_frame['signal_text'].fillna('HOLD')
+    simulation_frame['signal_number'] = simulation_frame['signal_number'].fillna(0).astype(int)
+
+    cash_balance = starting_cash
+    stock_units = 0.0
+    total_cost = 0.0
+    transactions = []
+    daily_rows = []
+
+    for _, row in simulation_frame.iterrows():
+        trade_price = _average_open_close(row['Open'], row['Close'])
+        signal_text = _normalize_signal_text(row['signal_text'])
+        action = "HOLD"
+        trade_units = 0.0
+        trade_value = 0.0
+
+        if signal_text in ("WEAK BUY", "STRONG BUY") and trade_price:
+            target_trade_value = starting_cash * TRADE_ALLOCATION_BY_SIGNAL[signal_text]
+            trade_value = min(target_trade_value, cash_balance)
+            if trade_value > 0:
+                trade_units = trade_value / trade_price
+                cash_balance -= trade_value
+                stock_units += trade_units
+                total_cost += trade_value
+                action = "BUY"
+        elif signal_text in ("WEAK SELL", "STRONG SELL") and trade_price and stock_units > 0:
+            trade_units = stock_units * TRADE_ALLOCATION_BY_SIGNAL[signal_text]
+            trade_units = min(trade_units, stock_units)
+            trade_value = trade_units * trade_price
+            if trade_units > 0 and trade_value > 0:
+                average_cost_before_sale = (total_cost / stock_units) if stock_units > 0 else 0
+                cash_balance += trade_value
+                stock_units -= trade_units
+                total_cost -= average_cost_before_sale * trade_units
+                total_cost = max(total_cost, 0.0)
+                stock_units = max(stock_units, 0.0)
+                action = "SELL"
+
+        holdings_value = stock_units * row['Close']
+        portfolio_value = cash_balance + holdings_value
+        average_cost_per_unit = (total_cost / stock_units) if stock_units > 0 else 0.0
+        profit_loss = portfolio_value - starting_cash
+        profit_loss_pct = (profit_loss / starting_cash * 100) if starting_cash else None
+
+        daily_rows.append({
+            "Date": row['Date'],
+            "Open": row['Open'],
+            "Close": row['Close'],
+            "Trade_Price": trade_price,
+            "signal_text": signal_text,
+            "signal_number": row['signal_number'],
+            "action": action,
+            "trade_units": trade_units,
+            "trade_value": trade_value,
+            "cash_balance": cash_balance,
+            "units_held": stock_units,
+            "average_cost_per_unit": average_cost_per_unit,
+            "holdings_value": holdings_value,
+            "portfolio_value": portfolio_value,
+            "profit_loss": profit_loss,
+            "profit_loss_pct": profit_loss_pct,
+        })
+
+        if action in ("BUY", "SELL"):
+            transactions.append({
+                "Date": row['Date'],
+                "action": action,
+                "signal_text": signal_text,
+                "trade_price": trade_price,
+                "units": trade_units,
+                "trade_value": trade_value,
+                "cash_balance": cash_balance,
+                "units_held": stock_units,
+                "portfolio_value": portfolio_value,
+            })
+
+    daily_history = pd.DataFrame(daily_rows)
+    transactions_frame = pd.DataFrame(transactions)
+
+    latest_row = daily_history.iloc[-1]
+    summary = pd.DataFrame([{
+        "start_date": daily_history.iloc[0]['Date'],
+        "end_date": latest_row['Date'],
+        "initial_funds": starting_cash,
+        "ending_cash_balance": latest_row['cash_balance'],
+        "units_held": latest_row['units_held'],
+        "average_cost_per_unit": latest_row['average_cost_per_unit'],
+        "latest_close": latest_row['Close'],
+        "holdings_value": latest_row['holdings_value'],
+        "total_portfolio_value": latest_row['portfolio_value'],
+        "profit_loss": latest_row['profit_loss'],
+        "profit_loss_pct": latest_row['profit_loss_pct'],
+        "buy_transactions": int((transactions_frame['action'] == 'BUY').sum()) if not transactions_frame.empty else 0,
+        "sell_transactions": int((transactions_frame['action'] == 'SELL').sum()) if not transactions_frame.empty else 0,
+    }])
+
+    return {
+        "price_history": price_history,
+        "daily_history": daily_history,
+        "transactions": transactions_frame,
+        "summary": summary,
+    }
+
+
 def exploratory_simulation_from_prediction(df_pred, initial_funds=1000, start_iloc=1, end_iloc=31):
     sim_input = df_pred[['High', 'Low', 'Close', 'Date', 'TICKER', 'Signal_Text']].copy()
     return simulation.simulate_exploratory_trading(sim_input, start_iloc, end_iloc, initial_funds)
@@ -759,7 +971,7 @@ def run_holdings_workflow(portfolio_path, initial_funds=1000, include_sentiment=
 
     for holding in holdings:
         ticker = holding['ticker']
-        analysis = build_stock_analysis(ticker, include_sentiment=include_sentiment, include_fundamentals=True)
+        analysis = build_stock_analysis(ticker, include_sentiment=include_sentiment)
         analyses[ticker] = analysis
         prediction_rows.append(build_prediction_summary_row(analysis))
 
@@ -775,7 +987,7 @@ def run_holdings_workflow(portfolio_path, initial_funds=1000, include_sentiment=
     }
 
 
-def run_specific_stock_simulation_workflow(tickers, initial_funds=1000, include_sentiment=False, include_fundamentals=True):
+def run_specific_stock_simulation_workflow(tickers, initial_funds=1000, include_sentiment=False):
     analyses = {}
     prediction_rows = []
     simulation_rows = []
@@ -783,8 +995,7 @@ def run_specific_stock_simulation_workflow(tickers, initial_funds=1000, include_
     for ticker in tickers:
         analysis = build_stock_analysis(
             ticker,
-            include_sentiment=include_sentiment,
-            include_fundamentals=include_fundamentals,
+            include_sentiment=include_sentiment
         )
         analyses[ticker] = analysis
         prediction_rows.append(build_prediction_summary_row(analysis))
@@ -805,7 +1016,6 @@ def run_index_search_workflow(
     index_name="sp500",
     limit=50,
     include_sentiment=False,
-    include_fundamentals=True,
     use_ticker_cache=True,
     ticker_cache_dir=DEFAULT_CACHE_DIR,
     ticker_cache_max_age_hours=DEFAULT_INDEX_CACHE_MAX_AGE_HOURS,
@@ -825,8 +1035,7 @@ def run_index_search_workflow(
     for ticker in tickers:
         analysis = build_stock_analysis(
             ticker,
-            include_sentiment=include_sentiment,
-            include_fundamentals=include_fundamentals,
+            include_sentiment=include_sentiment
         )
         analyses[ticker] = analysis
         prediction_rows.append(build_prediction_summary_row(analysis))

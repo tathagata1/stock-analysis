@@ -60,31 +60,6 @@ def vwap(df): #Volume-Weighted Average Price
     vwap_value = (q * p).cumsum() / q.cumsum()
     return vwap_value
 
-# Calculation and Data Preparation Function
-def get_technical_analysis_calculations(df):
-    # Ensure numeric conversion with error handling
-    cols = ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
-    df[cols] = df[cols].apply(pd.to_numeric, errors='coerce')
-    
-    # Calculate technical indicators
-    df['SMA' + str(config.sma1)] = sma(df, config.sma1)
-    df['SMA' + str(config.sma2)] = sma(df, config.sma2)
-    df['EMA' + str(config.ema1)] = ema(df, config.ema1)
-    df['EMA' + str(config.ema2)] = ema(df, config.ema2)
-    df['RSI'] = rsi(df)
-    df['High_Volume'] = high_volume(df)
-    df['Middle_Band'], df['Upper_Band'], df['Lower_Band'] = bollinger_bands(df)
-    df['MACD'], df['Signal_Line'] = macd(df)
-    df['%K'], df['%D'] = stochastic_oscillator(df)
-    df['ATR'] = atr(df)
-    df['VWAP'] = vwap(df)
-    
-    # Calculate other stuff
-    df['Daily_Return'] = df['Close'].pct_change()
-    df['Cumulative_Return'] = (1 + df['Daily_Return']).cumprod() - 1
-    df['Daily Gain/Loss']=df["Close"] - df["Open"]
-    return df
-
 # Technical Analysis functions
 def calculate_buy_score(row):
     score = 0
@@ -125,3 +100,28 @@ def calculate_sell_score(row):
     if not row['ATR'] > config.atr:
         score -= 0.02
     return score
+
+# Calculation and Data Preparation Function
+def get_technical_analysis_calculations(df):
+    # Ensure numeric conversion with error handling
+    cols = ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
+    df[cols] = df[cols].apply(pd.to_numeric, errors='coerce')
+    
+    # Calculate technical indicators
+    df['SMA' + str(config.sma1)] = sma(df, config.sma1)
+    df['SMA' + str(config.sma2)] = sma(df, config.sma2)
+    df['EMA' + str(config.ema1)] = ema(df, config.ema1)
+    df['EMA' + str(config.ema2)] = ema(df, config.ema2)
+    df['RSI'] = rsi(df)
+    df['High_Volume'] = high_volume(df)
+    df['Middle_Band'], df['Upper_Band'], df['Lower_Band'] = bollinger_bands(df)
+    df['MACD'], df['Signal_Line'] = macd(df)
+    df['%K'], df['%D'] = stochastic_oscillator(df)
+    df['ATR'] = atr(df)
+    df['VWAP'] = vwap(df)
+    
+    # Calculate other stuff
+    df['Daily_Return'] = df['Close'].pct_change()
+    df['Cumulative_Return'] = (1 + df['Daily_Return']).cumprod() - 1
+    df['Daily Gain/Loss']=df["Close"] - df["Open"]
+    return df

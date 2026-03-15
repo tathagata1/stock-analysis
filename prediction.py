@@ -50,23 +50,12 @@ def apply_fundamental_analysis(df_stats):
     ]
     return sum(modifiers)
 
-def get_prediction(df, stats, include_sentiment=True, include_fundamental=True):
+def get_prediction(df, stats, include_sentiment=True):
 
     df = technical_analysis.get_technical_analysis_calculations(df)
     df['technical_analysis_buy_score'] = df.apply(apply_technical_analysis_buy, axis=1)      #0 to +1      
     df['technical_analysis_sell_score'] = df.apply(apply_technical_analysis_sell, axis=1)    #-1 to 0     
-    df['fundamental_analysis_score'] = apply_fundamental_analysis(stats) if include_fundamental else 0  #-1 to +1      
-    ticker = df["TICKER"].iloc[0]
-    df['sentiment_analysis_score'] = apply_sentiment_analysis(ticker) if include_sentiment else 0  #-1 to +1
-
-    return df
-
-def get_statsless_prediction(df, include_sentiment=True):
-
-    df = technical_analysis.get_technical_analysis_calculations(df)
-    df['technical_analysis_buy_score'] = df.apply(apply_technical_analysis_buy, axis=1)            #0 to +1
-    df['technical_analysis_sell_score'] = df.apply(apply_technical_analysis_sell, axis=1)          #-1 to 0
-    df['fundamental_analysis_score'] = 0
+    df['fundamental_analysis_score'] = apply_fundamental_analysis(stats)
     ticker = df["TICKER"].iloc[0]
     df['sentiment_analysis_score'] = apply_sentiment_analysis(ticker) if include_sentiment else 0  #-1 to +1
 
@@ -85,11 +74,11 @@ def add_total_signal(df):
 
 def convert_signal_to_text(df):
     conditions = [
-        (df['Signal'] <= -1),
-        (df['Signal'] > -1) & (df['Signal'] < -0.7),
+        (df['Signal'] <= -0.9),
+        (df['Signal'] > -0.9) & (df['Signal'] < -0.7),
         (df['Signal'] >= -0.7) & (df['Signal'] < 0.7),
-        (df['Signal'] >= 0.7) & (df['Signal'] < 1),
-        (df['Signal'] >= 1),
+        (df['Signal'] >= 0.7) & (df['Signal'] < 0.9),
+        (df['Signal'] >= 0.9),
     ]
     choices = ['STRONG SELL', 'WEAK SELL', 'HOLD', 'WEAK BUY', 'STRONG BUY']
     df['Signal_Text'] = np.select(conditions, choices, default='HOLD')
