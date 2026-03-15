@@ -39,7 +39,14 @@ def get_news_sentiment(stock, gpt_resp):
             for _, article in recent_articles[:MAX_NEWS_ARTICLES_FOR_SENTIMENT]:
                 age = datetime.now() - datetime.strptime(article['publishedAt'], "%Y-%m-%dT%H:%M:%SZ")
                 if age <= timedelta(days=30):
-                    post = str(article['source']['name'])+"."+str(article['author'])+"."+str(article['title'])+"."+str(article['content'])+"."+str(article['description'])+"."+dao.get_news_post(article['url'])
+                    post = ".".join([
+                        str((article.get('source') or {}).get('name') or ""),
+                        str(article.get('author') or ""),
+                        str(article.get('title') or ""),
+                        str(article.get('content') or ""),
+                        str(article.get('description') or ""),
+                        str(dao.get_news_post(article.get('url')) or ""),
+                    ])
                     gpt_resp.append(dao.get_gpt_score_with_confidence(stock, post))
     except:
         return gpt_resp

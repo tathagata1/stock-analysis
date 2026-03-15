@@ -1,4 +1,3 @@
-import os
 import logging
 import json
 from datetime import datetime, timezone
@@ -161,22 +160,6 @@ def get_gpt_score_with_confidence(stock, post):
         return '{ "score": "0", "confidence": "0" }'
 
     return completion.choices[0].message.content
-
-
-def write_csv(file_name, tmp_data):
-    if os.path.isfile(file_name):
-        os.remove(file_name)
-    data = pd.DataFrame(data=tmp_data)
-    data.to_csv(file_name, index=True)
-
-
-def write_json(file_name, tmp_data):
-    if os.path.isfile(file_name):
-        os.remove(file_name)
-    with open(file_name, 'w') as file:
-        json.dump(tmp_data, file, indent=4)
-
-
 def read_json(file_name):
     with open(file_name, 'r') as file:
         content = file.read()

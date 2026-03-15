@@ -192,3 +192,18 @@ def get_enterprise_value_modifier(enterprise_value):
         return -0.125  # Small decrease for moderate risk
     else:  # Micro-sized companies
         return -0.25  # Larger decrease for high risk
+    
+
+def get_fundamental_analysis(df_stats):
+    modifiers = [
+        get_market_cap_modifier(df_stats['Market Cap']),
+        get_enterprise_value_modifier(df_stats['Enterprise Value']),
+        get_tpe_ratio_modifier(df_stats['Trailing P/E']),
+        get_fpe_ratio_modifier(df_stats['Forward P/E']),
+        get_peg_modifier(df_stats['PEG Ratio (5yr expected)']),
+        get_price_sales_modifier(df_stats['Price/Sales']),
+        get_ev_ebitda_modifier(df_stats['Enterprise Value/EBITDA']),
+        get_ev_revenue_modifier(df_stats['Enterprise Value/Revenue']),
+        get_price_book_modifier(df_stats['Price/Book']),
+    ]
+    return sum(modifiers)
