@@ -2,7 +2,7 @@ import configparser
 import json
 
 config = configparser.ConfigParser()
-config.read('config.ini')
+config.read('config/config.ini')
 
 chatgpt_key=config['API']['chatgpt_key']
 

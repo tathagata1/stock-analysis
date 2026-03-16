@@ -2,4 +2,4 @@ portfolio/*
 cache/*
 output/*
 __pycache__
-config.ini
+config/config.ini

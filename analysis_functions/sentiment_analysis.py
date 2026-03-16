@@ -1,4 +1,6 @@
-import dao
+import json
+
+import dao.dao as dao
 from datetime import datetime, timedelta
 
 MAX_REDDIT_POSTS_FOR_SENTIMENT = 10
@@ -52,3 +54,19 @@ def get_news_sentiment(stock, gpt_resp):
         return gpt_resp
     
     return gpt_resp
+
+def apply_sentiment_analysis(stock):
+    payloads = get_news_sentiment(
+        stock,
+        get_reddit_sentiment(stock, []),
+    )
+    try:
+        scores = [
+            float(item["score"])
+            for item in (json.loads(payload) for payload in payloads)
+            if float(item["confidence"]) >= 0.90
+        ]
+    except Exception:
+        print("error in apply_sentiment_analysis")
+        return 0
+    return sum(scores) / len(scores) if scores else 0

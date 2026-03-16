@@ -4,9 +4,9 @@ from datetime import datetime
 
 import pandas as pd
 
-import dao
-import prediction
-import simulation
+import dao.dao as dao
+import analysis_types.prediction  as prediction
+import analysis_types.simulation as simulation
 import config
 
 
