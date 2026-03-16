@@ -12,7 +12,7 @@ import requests
 from bs4 import BeautifulSoup
 from openai import OpenAI
 
-import config
+import config.config as config
 
 import json
 from pathlib import Path
@@ -192,13 +192,13 @@ def get_index_constituents(index_name="sp500"):
     return []
 
 
-def get_yahoo_finance_5y(var_stock):
+def get_yahoo_finance(var_stock, period="1d"):
     _require_yfinance()
     try:
         ticker = yf.Ticker(var_stock)
-        hist = ticker.history(period="5y", auto_adjust=False, actions=False)
+        hist = ticker.history(period=period, auto_adjust=False, actions=False)
         if hist is None or hist.empty:
-            logging.error("Error in get_yahoo_finance_5y for %s", var_stock)
+            logging.error("Error in get_yahoo_finance for %s", var_stock)
             return pd.DataFrame(columns=['Date', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume', 'TICKER'])
 
         if 'Adj Close' not in hist.columns:
@@ -214,7 +214,7 @@ def get_yahoo_finance_5y(var_stock):
         return hist
 
     except Exception as exc:
-        logging.error("Error in get_yahoo_finance_5y for %s: %s", var_stock, exc)
+        logging.error("Error in get_yahoo_finance for %s: %s", var_stock, exc)
         return pd.DataFrame(columns=['Date', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume', 'TICKER'])
 
 

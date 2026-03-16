@@ -1,4 +1,4 @@
-import config
+import config.config as config
 import pandas as pd
 
 #Momentum Indicators
@@ -63,42 +63,50 @@ def vwap(df): #Volume-Weighted Average Price
 # Technical Analysis functions
 def calculate_buy_score(row):
     score = 0
-    if row['RSI'] < config.rsi_buy and row['SMA' + str(config.sma1)] > row['SMA' + str(config.sma2)]:
-        score += 0.3
-    if row['RSI'] < config.rsi_buy and row['EMA' + str(config.ema1)] > row['EMA' + str(config.ema2)]:
-        score += 0.3
+    if row['RSI'] < config.rsi_buy:
+        score += 0.2
+    elif row['RSI'] < (config.rsi_buy + 10):
+        score += 0.1
+    if row['SMA' + str(config.sma1)] > row['SMA' + str(config.sma2)]:
+        score += 0.2
+    if row['EMA' + str(config.ema1)] > row['EMA' + str(config.ema2)]:
+        score += 0.2
     if row['Close'] < row['VWAP']:
-        score += 0.15
+        score += 0.1
     if row['%K'] < config.stoc_buy and row['%D'] < config.stoc_buy:
-        score += 0.15
+        score += 0.1
     if row['Close'] < row['Lower_Band']:
-        score += 0.03
+        score += 0.1
     if row['MACD'] > row['Signal_Line']:
-        score += 0.03
+        score += 0.15
     if row['High_Volume']:
-        score += 0.02
+        score += 0.05
     if row['ATR'] > config.atr:
-        score += 0.02
+        score += 0.05
     return score
 
 def calculate_sell_score(row):
     score = 0
-    if row['RSI'] > config.rsi_sell and row['SMA' + str(config.sma1)] < row['SMA' + str(config.sma2)]:
-        score -= 0.3
-    if row['RSI'] > config.rsi_sell and row['EMA' + str(config.ema1)] < row['EMA' + str(config.ema2)]:
-        score -= 0.3
+    if row['RSI'] > config.rsi_sell:
+        score -= 0.2
+    elif row['RSI'] > (config.rsi_sell - 10):
+        score -= 0.1
+    if row['SMA' + str(config.sma1)] < row['SMA' + str(config.sma2)]:
+        score -= 0.2
+    if row['EMA' + str(config.ema1)] < row['EMA' + str(config.ema2)]:
+        score -= 0.2
     if row['Close'] > row['VWAP']:
-        score -= 0.15
+        score -= 0.1
     if row['%K'] > config.stoc_sell and row['%D'] > config.stoc_sell:
-        score -= 0.15
+        score -= 0.1
     if row['Close'] > row['Upper_Band']:
-        score -= 0.03
+        score -= 0.1
     if row['MACD'] < row['Signal_Line']:
-        score -= 0.03
+        score -= 0.15
     if not row['High_Volume']:
-        score -= 0.02
+        score -= 0.05
     if not row['ATR'] > config.atr:
-        score -= 0.02
+        score -= 0.05
     return score
 
 # Calculation and Data Preparation Function

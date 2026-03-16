@@ -5,8 +5,8 @@ import analysis_types.prediction  as prediction
 import analysis_types.simulation as simulation
 
 
-def build_prediction_and_stats(ticker, include_sentiment=False, return_stats=False):
-    df_5y = pd.DataFrame(dao.get_yahoo_finance_5y(ticker))
+def build_prediction_and_stats(ticker, include_sentiment=False, return_stats=False, period="1d"):
+    df_5y = pd.DataFrame(dao.get_yahoo_finance(ticker, period))
     stats_row = pd.DataFrame(dao.get_yahoo_finance_key_stats(ticker)).iloc[0]
     df_pred = prediction.get_prediction(
         df_5y,

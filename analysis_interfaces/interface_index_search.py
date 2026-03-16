@@ -3,7 +3,7 @@ from datetime import datetime
 import pandas as pd
 from analysis_interfaces.interface_specific_stock import build_prediction_and_stats
 import dao.dao as dao
-import config
+import config.config as config
 
 
 def current_run_date():
