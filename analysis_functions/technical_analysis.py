@@ -1,4 +1,7 @@
 import config.config as config
+from config.logging_config import get_logger
+
+logger = get_logger(__name__)
 import pandas as pd
 
 #Momentum Indicators
@@ -111,6 +114,8 @@ def calculate_sell_score(row):
 
 # Calculation and Data Preparation Function
 def get_technical_analysis_calculations(df):
+    ticker = df['TICKER'].iloc[0] if not df.empty and 'TICKER' in df.columns else "UNKNOWN"
+    logger.info("Calculating technical indicators. ticker=%s rows=%s", ticker, len(df))
     # Ensure numeric conversion with error handling
     cols = ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
     df[cols] = df[cols].apply(pd.to_numeric, errors='coerce')
@@ -132,4 +137,5 @@ def get_technical_analysis_calculations(df):
     df['Daily_Return'] = df['Close'].pct_change()
     df['Cumulative_Return'] = (1 + df['Daily_Return']).cumprod() - 1
     df['Daily Gain/Loss']=df["Close"] - df["Open"]
+    logger.info("Calculated technical indicators successfully. ticker=%s", ticker)
     return df

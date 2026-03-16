@@ -2,6 +2,9 @@ import math
 import random
 
 import pandas as pd
+from config.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 SIGNAL_TEXT_TO_NUMBER = {
     "STRONG SELL": -2,
@@ -62,6 +65,7 @@ def _average_open_close(open_price, close_price):
 
 
 def get_price_history(df_pred):
+    logger.info("Preparing price history for simulation.")
     if isinstance(df_pred, tuple):
         df_pred = df_pred[0]
     history = df_pred[['Date', 'Open', 'Close']].copy()
@@ -70,19 +74,27 @@ def get_price_history(df_pred):
     history['Close'] = pd.to_numeric(history['Close'], errors='coerce')
     history = history.dropna(subset=['Date', 'Open', 'Close']).sort_values('Date').reset_index(drop=True)
     history['Trade_Price'] = (history['Open'] + history['Close']) / 2
+    ticker = df_pred["TICKER"].iloc[0] if not df_pred.empty and "TICKER" in df_pred.columns else "UNKNOWN"
+    logger.info("Prepared price history for simulation. ticker=%s rows=%s", ticker, len(history))
     return history
 
 
 def simulate_prediction_signal_strategy(df_pred, initial_funds):
+    ticker = "UNKNOWN"
     if isinstance(df_pred, tuple):
         df_pred = df_pred[0]
+    if not df_pred.empty and "TICKER" in df_pred.columns:
+        ticker = df_pred["TICKER"].iloc[0]
+    logger.info("Starting prediction signal simulation. ticker=%s initial_funds=%s", ticker, initial_funds)
 
     price_history = get_price_history(df_pred)
     if price_history.empty:
+        logger.error("Prediction signal simulation aborted because price history is empty. ticker=%s", ticker)
         raise ValueError("Price history is empty")
 
     starting_cash = _safe_float(initial_funds)
     if starting_cash is None or starting_cash < 0:
+        logger.error("Prediction signal simulation received invalid initial funds. ticker=%s initial_funds=%s", ticker, initial_funds)
         raise ValueError("initial_funds must be zero or a positive number")
 
     signal_history = df_pred[['Date', 'Signal_Text']].copy()
@@ -172,6 +184,13 @@ def simulate_prediction_signal_strategy(df_pred, initial_funds):
     daily_history = pd.DataFrame(daily_rows)
     transactions_frame = pd.DataFrame(transactions, columns=PREDICTION_TRANSACTION_COLUMNS)
     latest_row = daily_history.iloc[-1]
+    logger.info(
+        "Completed prediction signal simulation. ticker=%s buys=%s sells=%s ending_portfolio_value=%s",
+        ticker,
+        int((transactions_frame['action'] == 'BUY').sum()) if not transactions_frame.empty else 0,
+        int((transactions_frame['action'] == 'SELL').sum()) if not transactions_frame.empty else 0,
+        latest_row['portfolio_value'],
+    )
 
     return {
         "price_history": price_history,
@@ -196,6 +215,13 @@ def simulate_prediction_signal_strategy(df_pred, initial_funds):
 
 
 def _simulate_trading(sim_df, initial_funds, stock_units=0, total_cost=0):
+    logger.info(
+        "Starting exploratory trading simulation. rows=%s initial_funds=%s stock_units=%s total_cost=%s",
+        len(sim_df),
+        initial_funds,
+        stock_units,
+        total_cost,
+    )
     cash_balance = initial_funds
     transaction_log = []
 
@@ -234,6 +260,12 @@ def _simulate_trading(sim_df, initial_funds, stock_units=0, total_cost=0):
         if math.isnan(unrealised_gains_losses_percentage):
             unrealised_gains_losses_percentage = 0
 
+    logger.info(
+        "Completed exploratory trading simulation. rows=%s final_cash_balance=%s units_held=%s",
+        len(sim_df),
+        round(cash_balance, 2),
+        round(stock_units, 4),
+    )
     return {
         "closing_stock_price": closing_price,
         "final_cash_balance": round(cash_balance, 2),
@@ -246,10 +278,24 @@ def _simulate_trading(sim_df, initial_funds, stock_units=0, total_cost=0):
 
 
 def simulate_exploratory_trading(file_to_sim_df, start_iloc, end_iloc, initial_funds):
+    logger.info(
+        "Running exploratory trading window. start_iloc=%s end_iloc=%s initial_funds=%s",
+        start_iloc,
+        end_iloc,
+        initial_funds,
+    )
     sim_df = file_to_sim_df.iloc[start_iloc:start_iloc + end_iloc][::-1]
     return _simulate_trading(sim_df, initial_funds)
 
 
 def simulate_portfolio_trades(file_to_sim_df, start_iloc, end_iloc, initial_funds, units_held, avg_price):
+    logger.info(
+        "Running portfolio trade window. start_iloc=%s end_iloc=%s initial_funds=%s units_held=%s avg_price=%s",
+        start_iloc,
+        end_iloc,
+        initial_funds,
+        units_held,
+        avg_price,
+    )
     sim_df = file_to_sim_df.iloc[start_iloc:start_iloc + end_iloc][::-1]
     return _simulate_trading(sim_df, initial_funds, stock_units=units_held, total_cost=avg_price * units_held)

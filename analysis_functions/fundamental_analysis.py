@@ -1,3 +1,8 @@
+from config.logging_config import get_logger
+
+logger = get_logger(__name__)
+
+
 def get_ev_ebitda_modifier(ev_ebitda_ratio):
     
     
@@ -195,6 +200,8 @@ def get_enterprise_value_modifier(enterprise_value):
     
 
 def get_fundamental_analysis(df_stats):
+    ticker = df_stats.get('TICKER', 'UNKNOWN') if hasattr(df_stats, 'get') else 'UNKNOWN'
+    logger.info("Calculating fundamental analysis score. ticker=%s", ticker)
     modifiers = [
         get_market_cap_modifier(df_stats['Market Cap']),
         get_enterprise_value_modifier(df_stats['Enterprise Value']),
@@ -206,4 +213,6 @@ def get_fundamental_analysis(df_stats):
         get_ev_revenue_modifier(df_stats['Enterprise Value/Revenue']),
         get_price_book_modifier(df_stats['Price/Book']),
     ]
-    return sum(modifiers)
+    score = sum(modifiers)
+    logger.info("Calculated fundamental analysis score successfully. ticker=%s score=%s", ticker, score)
+    return score

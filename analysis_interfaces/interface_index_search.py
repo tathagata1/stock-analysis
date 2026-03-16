@@ -4,6 +4,9 @@ import pandas as pd
 from analysis_interfaces.interface_specific_stock import build_prediction_and_stats
 import dao.dao as dao
 import config.config as config
+from config.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def current_run_date():
@@ -19,11 +22,13 @@ def build_prediction_summary_row(stock_analysis, run_date=None):
     }
 
 
-def build_stock_analysis(ticker, include_sentiment=False):
+def build_stock_analysis(ticker, include_sentiment=False, period="max"):
+    logger.info("Building stock analysis. ticker=%s include_sentiment=%s period=%s", ticker, include_sentiment, period)
     df_pred, stats_row = build_prediction_and_stats(
         ticker,
         include_sentiment=include_sentiment,
         return_stats=True,
+        period=period,
     )
     
     latest_row = df_pred.iloc[0]
@@ -46,7 +51,15 @@ def run_index_search_workflow(
     use_ticker_cache=True,
     ticker_cache_dir=config.DEFAULT_CACHE_DIR,
     ticker_cache_max_age_hours=config.DEFAULT_INDEX_CACHE_MAX_AGE_HOURS,
+    period="max",
 ):
+    logger.info(
+        "Running index search workflow. index_name=%s limit=%s include_sentiment=%s use_ticker_cache=%s",
+        index_name,
+        limit,
+        include_sentiment,
+        use_ticker_cache,
+    )
     if use_ticker_cache:
         tickers, ticker_cache = dao.get_index_tickers_cached(
             index_name=index_name,
@@ -62,9 +75,11 @@ def run_index_search_workflow(
     prediction_rows = []
     
     for ticker in tickers:
+        logger.info("Processing index constituent. index_name=%s ticker=%s", index_name, ticker)
         analysis = build_stock_analysis(
             ticker,
             include_sentiment=include_sentiment,
+            period=period,
         )
         analyses[ticker] = analysis
         prediction_rows.append(build_prediction_summary_row(analysis))
@@ -81,4 +96,10 @@ def run_index_search_workflow(
             by=['Signal', 'TICKER'],
             ascending=[False, True],
         ).reset_index(drop=True)
+    logger.info(
+        "Completed index search workflow. index_name=%s ticker_count=%s summary_rows=%s",
+        index_name,
+        len(tickers),
+        len(result["prediction_summary"]),
+    )
     return result

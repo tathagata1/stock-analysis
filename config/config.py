@@ -45,3 +45,7 @@ STRONG_SELL_THRESHOLD = float(config['OTHERS']['STRONG_SELL_THRESHOLD'])
 WEAK_SELL_THRESHOLD = float(config['OTHERS']['WEAK_SELL_THRESHOLD'])
 WEAK_BUY_THRESHOLD = float(config['OTHERS']['WEAK_BUY_THRESHOLD'])
 STRONG_BUY_THRESHOLD = float(config['OTHERS']['STRONG_BUY_THRESHOLD'])
+
+LOG_DIR = config.get('Logging', 'LOG_DIR', fallback='logs').strip().strip('"').strip("'")
+LOG_LEVEL = config.get('Logging', 'LOG_LEVEL', fallback='INFO').upper()
+LOG_FILE_NAME = config.get('Logging', 'LOG_FILE_NAME', fallback='stock_analysis.log')
