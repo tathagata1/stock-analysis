@@ -5,15 +5,11 @@ from io import StringIO
 from urllib.parse import quote_plus
 import xml.etree.ElementTree as ET
 import os
-
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 from openai import OpenAI
-
 import config.config as config
-
-import json
 from pathlib import Path
 import yfinance as yf
 
