@@ -4,4 +4,4 @@ output/*
 __pycache__
 config/config.ini
 logs/*
-hypothesis.md
+*.md

@@ -24,6 +24,9 @@ REQUEST_HEADERS = {
     )
 }
 
+QUARTERLY_REPORT_LAG_DAYS = 45
+ANNUAL_REPORT_LAG_DAYS = 90
+
 INDEX_SOURCES = {
     "ftse100": {
         "url": "https://en.wikipedia.org/wiki/FTSE_100_Index#Constituents",
@@ -163,6 +166,66 @@ def _previous_value(frame, candidates, offset=1, fallback="--"):
     if len(values) <= offset:
         return fallback
     return values[offset]
+
+
+def _normalize_timestamp(value):
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return pd.NaT
+    timestamp = pd.Timestamp(parsed)
+    if timestamp.tzinfo is not None:
+        return timestamp.tz_localize(None)
+    return timestamp
+
+
+def _statement_column_dates(frame):
+    if frame is None or frame.empty:
+        return []
+    dates = []
+    for column in frame.columns:
+        parsed = _normalize_timestamp(column)
+        if pd.isna(parsed):
+            continue
+        dates.append(parsed)
+    return sorted(set(dates), reverse=True)
+
+
+def _value_at_report_date(frame, report_date, candidates, fallback="--"):
+    if frame is None or frame.empty or report_date is None:
+        return fallback
+    target_date = _normalize_timestamp(report_date)
+    for column in frame.columns:
+        parsed = _normalize_timestamp(column)
+        if pd.isna(parsed):
+            continue
+        if parsed != target_date:
+            continue
+        row = _matching_row(frame, candidates)
+        if row is None:
+            return fallback
+        return _normalize_numeric_or_missing(row[column])
+    return fallback
+
+
+def _value_at_report_date_from_frames(frames, report_date, candidates, fallback="--"):
+    for frame in frames:
+        value = _value_at_report_date(frame, report_date, candidates, fallback=fallback)
+        if value != fallback:
+            return value
+    return fallback
+
+
+def _metric_values_from_frames_over_dates(frames, report_dates, candidates):
+    values = []
+    for report_date in report_dates:
+        value = _value_at_report_date_from_frames(frames, report_date, candidates)
+        if value == "--":
+            continue
+        try:
+            values.append(float(value))
+        except Exception:
+            continue
+    return values
 
 
 def get_gpt_score_with_confidence(stock, post):
@@ -592,3 +655,117 @@ def get_advanced_financial_metrics(ticker_symbol):
     }
     logger.info("Fetched advanced financial raw data successfully. ticker=%s fields=%s", ticker_symbol, len(raw_data) - 1)
     return pd.DataFrame([raw_data])
+
+
+def get_point_in_time_financial_snapshots(ticker_symbol):
+    logger.info("Fetching point-in-time financial snapshots. ticker=%s", ticker_symbol)
+    try:
+        ticker = yf.Ticker(ticker_symbol)
+        info = ticker.info or {}
+    except Exception:
+        logger.exception("Failed to initialize yfinance ticker for point-in-time snapshots. ticker=%s", ticker_symbol)
+        return pd.DataFrame()
+
+    quarterly_income_stmt = _safe_statement_frame(ticker, "quarterly_income_stmt")
+    quarterly_balance_sheet = _safe_statement_frame(ticker, "quarterly_balance_sheet")
+    quarterly_cashflow = _safe_statement_frame(ticker, "quarterly_cashflow")
+
+    annual_income_stmt = _safe_statement_frame(ticker, "income_stmt", "financials")
+    annual_balance_sheet = _safe_statement_frame(ticker, "balance_sheet")
+    annual_cashflow = _safe_statement_frame(ticker, "cashflow")
+
+    quarterly_dates = set(
+        _statement_column_dates(quarterly_income_stmt)
+        + _statement_column_dates(quarterly_balance_sheet)
+        + _statement_column_dates(quarterly_cashflow)
+    )
+    annual_dates = set(
+        _statement_column_dates(annual_income_stmt)
+        + _statement_column_dates(annual_balance_sheet)
+        + _statement_column_dates(annual_cashflow)
+    )
+    report_dates = sorted(quarterly_dates | annual_dates, reverse=True)
+
+    if not report_dates:
+        logger.warning("No statement history available for point-in-time snapshots. ticker=%s", ticker_symbol)
+        return pd.DataFrame()
+
+    shares_outstanding = _safe_info_value(info, "sharesOutstanding")
+    rows = []
+
+    for index, report_date in enumerate(report_dates):
+        is_quarterly = report_date in quarterly_dates
+        lag_days = QUARTERLY_REPORT_LAG_DAYS if is_quarterly else ANNUAL_REPORT_LAG_DAYS
+        next_report_date = report_dates[index + 1] if index + 1 < len(report_dates) else None
+
+        income_frames = [quarterly_income_stmt, annual_income_stmt] if is_quarterly else [annual_income_stmt, quarterly_income_stmt]
+        balance_frames = [quarterly_balance_sheet, annual_balance_sheet] if is_quarterly else [annual_balance_sheet, quarterly_balance_sheet]
+        cashflow_frames = [quarterly_cashflow, annual_cashflow] if is_quarterly else [annual_cashflow, quarterly_cashflow]
+
+        row = {
+            "TICKER": ticker_symbol,
+            "report_date": pd.Timestamp(report_date),
+            "available_from": pd.Timestamp(report_date) + pd.Timedelta(days=lag_days),
+            "Shares Outstanding": shares_outstanding,
+            "Total Revenue": _value_at_report_date_from_frames(income_frames, report_date, ["Total Revenue", "Revenue"]),
+            "Previous Total Revenue": _value_at_report_date_from_frames(income_frames, next_report_date, ["Total Revenue", "Revenue"]),
+            "EBITDA": _value_at_report_date_from_frames(income_frames, report_date, ["EBITDA"]),
+            "Previous EBITDA": _value_at_report_date_from_frames(income_frames, next_report_date, ["EBITDA"]),
+            "Operating Income": _value_at_report_date_from_frames(income_frames, report_date, ["Operating Income", "EBIT"]),
+            "Pretax Income": _value_at_report_date_from_frames(income_frames, report_date, ["Pretax Income", "Pre Tax Income"]),
+            "Tax Provision": _value_at_report_date_from_frames(income_frames, report_date, ["Tax Provision", "Income Tax Expense"]),
+            "Total Debt": _value_at_report_date_from_frames(balance_frames, report_date, ["Total Debt", "Long Term Debt And Capital Lease Obligation"]),
+            "Long Term Debt": _value_at_report_date_from_frames(balance_frames, report_date, ["Long Term Debt", "Long Term Debt And Capital Lease Obligation"]),
+            "Previous Long Term Debt": _value_at_report_date_from_frames(balance_frames, next_report_date, ["Long Term Debt", "Long Term Debt And Capital Lease Obligation"]),
+            "Cash And Equivalents": _value_at_report_date_from_frames(balance_frames, report_date, ["Cash And Cash Equivalents", "Cash Cash Equivalents And Short Term Investments", "Cash"]),
+            "Total Assets": _value_at_report_date_from_frames(balance_frames, report_date, ["Total Assets"]),
+            "Previous Total Assets": _value_at_report_date_from_frames(balance_frames, next_report_date, ["Total Assets"]),
+            "Total Liabilities": _value_at_report_date_from_frames(balance_frames, report_date, ["Total Liabilities Net Minority Interest", "Total Liabilities"]),
+            "Stockholders Equity": _value_at_report_date_from_frames(balance_frames, report_date, ["Stockholders Equity", "Total Stockholder Equity", "Common Stock Equity"]),
+            "Current Assets": _value_at_report_date_from_frames(balance_frames, report_date, ["Current Assets", "Total Current Assets"]),
+            "Previous Current Assets": _value_at_report_date_from_frames(balance_frames, next_report_date, ["Current Assets", "Total Current Assets"]),
+            "Current Liabilities": _value_at_report_date_from_frames(balance_frames, report_date, ["Current Liabilities", "Total Current Liabilities"]),
+            "Previous Current Liabilities": _value_at_report_date_from_frames(balance_frames, next_report_date, ["Current Liabilities", "Total Current Liabilities"]),
+            "Inventory": _value_at_report_date_from_frames(balance_frames, report_date, ["Inventory", "Inventories"]),
+            "Retained Earnings": _value_at_report_date_from_frames(balance_frames, report_date, ["Retained Earnings"]),
+            "Net Income": _value_at_report_date_from_frames(income_frames, report_date, ["Net Income", "Net Income Common Stockholders"]),
+            "Previous Net Income": _value_at_report_date_from_frames(income_frames, next_report_date, ["Net Income", "Net Income Common Stockholders"]),
+            "Gross Profit": _value_at_report_date_from_frames(income_frames, report_date, ["Gross Profit"]),
+            "Previous Gross Profit": _value_at_report_date_from_frames(income_frames, next_report_date, ["Gross Profit"]),
+            "Interest Expense": _value_at_report_date_from_frames(income_frames, report_date, ["Interest Expense", "Net Interest Income"]),
+            "Operating Cash Flow": _value_at_report_date_from_frames(cashflow_frames, report_date, ["Operating Cash Flow", "Total Cash From Operating Activities"]),
+            "Capital Expenditure": _value_at_report_date_from_frames(cashflow_frames, report_date, ["Capital Expenditure", "Capital Expenditures"]),
+            "Free Cash Flow": "--",
+            "Earnings Growth": "--",
+            "Revenue Growth Raw": "--",
+            "Current Ratio Raw": "--",
+            "Quick Ratio Raw": "--",
+            "Debt To Equity Raw": "--",
+            "Return On Equity Raw": "--",
+            "Gross Margins Raw": "--",
+            "Operating Margins Raw": "--",
+            "Average Daily Volume": "--",
+            "Market Cap": "--",
+            "Current Price": "--",
+            "Bid": "--",
+            "Ask": "--",
+            "Analyst Recommendation Score": "--",
+            "Target Mean Price": "--",
+            "Beta": "--",
+            "Diluted EPS Values": json.dumps(
+                _metric_values_from_frames_over_dates(
+                    income_frames,
+                    report_dates[index:],
+                    ["Diluted EPS", "Basic EPS"],
+                )
+            ),
+        }
+        rows.append(row)
+
+    frame = pd.DataFrame(rows).sort_values("available_from").reset_index(drop=True)
+    logger.info(
+        "Fetched point-in-time financial snapshots successfully. ticker=%s snapshot_count=%s",
+        ticker_symbol,
+        len(frame),
+    )
+    return frame
