@@ -6,8 +6,6 @@ import analysis_functions.sentiment_analysis as sentiment_analysis
 
 import config
 
-SIGNAL_MAPPING = {"STRONG SELL": -2,"WEAK SELL": -1,"HOLD": 0,"WEAK BUY": 1,"STRONG BUY": 2,}
-
 def get_prediction(df, stats=None, include_sentiment=True):
     df = technical_analysis.get_technical_analysis_calculations(df)
     df['technical_analysis_buy_score'] = df.apply(technical_analysis.calculate_buy_score, axis=1)
@@ -42,14 +40,3 @@ def convert_signal_to_text(df):
     choices = ['STRONG SELL', 'WEAK SELL', 'HOLD', 'WEAK BUY', 'STRONG BUY']
     df['Signal_Text'] = np.select(conditions, choices, default='HOLD')
     return df
-
-def get_weighted_signal(signals):
-    if len(signals) == 0:
-        return "HOLD", 0
-    reverse_mapping = {value: key for key, value in SIGNAL_MAPPING.items()}
-    numeric_signals = signals.map(SIGNAL_MAPPING)
-    weights = np.array([0.5 ** i for i in range(len(numeric_signals))])
-    normalized_weights = weights / weights.sum()
-    weighted_avg = np.dot(numeric_signals, normalized_weights)
-    closest_signal = round(weighted_avg)
-    return reverse_mapping[closest_signal], closest_signal

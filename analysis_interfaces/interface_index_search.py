@@ -3,7 +3,6 @@ from datetime import datetime
 import pandas as pd
 from analysis_interfaces.interface_specific_stock import build_prediction_and_stats
 import dao.dao as dao
-import analysis_types.prediction  as prediction
 import config
 
 
@@ -19,21 +18,19 @@ def build_prediction_summary_row(stock_analysis, run_date=None):
         "Signal_Text": stock_analysis["recent_signal"]["signal_text"],
     }
 
-def get_recent_weighted_signal(df_pred, start_iloc=config.DEFAULT_SIGNAL_LOOKBACK_START, end_iloc=config.DEFAULT_SIGNAL_LOOKBACK_END):
-    signals = df_pred["Signal_Text"].iloc[start_iloc:end_iloc + 1].reset_index(drop=True)
-    signal_text, signal_number = prediction.get_weighted_signal(signals)
-    return {
-        "signal_text": signal_text,
-        "signal_number": signal_number,
-        "signals_considered": len(signals),
-    }
 
 def build_stock_analysis(ticker, include_sentiment=False):
     df_pred, stats_row = build_prediction_and_stats(
         ticker,
         include_sentiment=include_sentiment,
+        return_stats=True,
     )
-    recent_signal = get_recent_weighted_signal(df_pred)
+    
+    latest_row = df_pred.iloc[0]
+    recent_signal = {
+        "signal_text": latest_row["Signal_Text"],
+        "signal_number": latest_row["Signal"],
+    }
 
     return {
         "ticker": ticker,
