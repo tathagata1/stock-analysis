@@ -48,8 +48,6 @@ def add_total_signal(df):
         + config.FUNDAMENTAL_SIGNAL_WEIGHT
         + config.MULTIFACTOR_SIGNAL_WEIGHT
     )
-    if total_weight == 0:
-        total_weight = 1.0
 
     df['Signal'] = (
         (technical_signal * config.TECHNICAL_SIGNAL_WEIGHT)

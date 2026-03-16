@@ -25,6 +25,14 @@ REQUEST_HEADERS = {
 }
 
 INDEX_SOURCES = {
+    "ftse100": {
+        "url": "https://en.wikipedia.org/wiki/FTSE_100_Index#Constituents",
+        "column": "Ticker",
+    },
+    "ftse250": {
+        "url": "https://en.wikipedia.org/wiki/FTSE_250_Index#Constituents",
+        "column": "Ticker",
+    },
     "sp500": {
         "url": "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
         "column": "Symbol",
@@ -254,6 +262,8 @@ def get_index_constituents(index_name="sp500"):
             tickers = table[source["column"]].astype(str).str.strip().tolist()
             # Yahoo Finance uses '-' instead of '.' for class shares (e.g., BRK.B -> BRK-B)
             normalized_tickers = [ticker.replace('.', '-') for ticker in tickers if ticker and ticker != 'nan']
+            if "ftse" in index_name.lower():
+                normalized_tickers = [ticker + ".L" for ticker in normalized_tickers]
             logger.info(
                 "Fetched index constituents successfully. index_name=%s ticker_count=%s",
                 index_name,
