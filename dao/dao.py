@@ -90,6 +90,73 @@ def _safe_ticker_info(var_stock):
     return ticker, info
 
 
+def _safe_info_value(info, *keys):
+    for key in keys:
+        normalized = _normalize_numeric_or_missing(info.get(key))
+        if normalized != "--":
+            return normalized
+    return "--"
+
+
+def _safe_statement_frame(ticker, *attr_names):
+    for attr_name in attr_names:
+        try:
+            value = getattr(ticker, attr_name, None)
+            if callable(value):
+                value = value()
+            if isinstance(value, pd.DataFrame) and not value.empty:
+                return value
+        except Exception:
+            logger.exception("Failed to load statement frame. attr_name=%s", attr_name)
+    return pd.DataFrame()
+
+
+def _matching_row(frame, candidates):
+    if frame is None or frame.empty:
+        return None
+
+    normalized_index = {str(index).strip().lower(): index for index in frame.index}
+    for candidate in candidates:
+        exact_match = normalized_index.get(candidate.strip().lower())
+        if exact_match is not None:
+            return frame.loc[exact_match]
+
+    for candidate in candidates:
+        candidate_normalized = candidate.strip().lower()
+        for index in frame.index:
+            index_normalized = str(index).strip().lower()
+            if candidate_normalized in index_normalized or index_normalized in candidate_normalized:
+                return frame.loc[index]
+    return None
+
+
+def _row_numeric_values(frame, candidates):
+    row = _matching_row(frame, candidates)
+    if row is None:
+        return []
+
+    values = []
+    for value in row.tolist():
+        normalized = _normalize_numeric_or_missing(value)
+        if normalized != "--":
+            values.append(float(normalized))
+    return values
+
+
+def _latest_value(frame, candidates, fallback="--"):
+    values = _row_numeric_values(frame, candidates)
+    if not values:
+        return fallback
+    return values[0]
+
+
+def _previous_value(frame, candidates, offset=1, fallback="--"):
+    values = _row_numeric_values(frame, candidates)
+    if len(values) <= offset:
+        return fallback
+    return values[offset]
+
+
 def get_gpt_score_with_confidence(stock, post):
     logger.info("Requesting GPT sentiment score. ticker=%s text_length=%s", stock, len(post or ""))
     try:
@@ -449,3 +516,69 @@ def get_index_tickers(index_name="sp500", limit=None):
     if limit is None:
         return tickers
     return tickers[:limit]
+
+
+def get_advanced_financial_metrics(ticker_symbol):
+    logger.info("Fetching advanced financial metrics. ticker=%s", ticker_symbol)
+    try:
+        ticker = yf.Ticker(ticker_symbol)
+        info = ticker.info or {}
+    except Exception:
+        logger.exception("Failed to initialize yfinance ticker for advanced metrics. ticker=%s", ticker_symbol)
+        return pd.DataFrame([{"TICKER": ticker_symbol}])
+
+    income_stmt = _safe_statement_frame(ticker, "income_stmt", "financials")
+    balance_sheet = _safe_statement_frame(ticker, "balance_sheet")
+    cashflow = _safe_statement_frame(ticker, "cashflow")
+
+    raw_data = {
+        "TICKER": ticker_symbol,
+        "Total Revenue": _safe_info_value(info, "totalRevenue") if _safe_info_value(info, "totalRevenue") != "--" else _latest_value(income_stmt, ["Total Revenue", "Revenue"]),
+        "Previous Total Revenue": _previous_value(income_stmt, ["Total Revenue", "Revenue"]),
+        "EBITDA": _safe_info_value(info, "ebitda") if _safe_info_value(info, "ebitda") != "--" else _latest_value(income_stmt, ["EBITDA"]),
+        "Previous EBITDA": _previous_value(income_stmt, ["EBITDA"]),
+        "Operating Income": _latest_value(income_stmt, ["Operating Income", "EBIT"]),
+        "Pretax Income": _latest_value(income_stmt, ["Pretax Income", "Pre Tax Income"]),
+        "Tax Provision": _latest_value(income_stmt, ["Tax Provision", "Income Tax Expense"]),
+        "Total Debt": _safe_info_value(info, "totalDebt") if _safe_info_value(info, "totalDebt") != "--" else _latest_value(balance_sheet, ["Total Debt", "Long Term Debt And Capital Lease Obligation"]),
+        "Long Term Debt": _latest_value(balance_sheet, ["Long Term Debt", "Long Term Debt And Capital Lease Obligation"]),
+        "Previous Long Term Debt": _previous_value(balance_sheet, ["Long Term Debt", "Long Term Debt And Capital Lease Obligation"]),
+        "Cash And Equivalents": _latest_value(balance_sheet, ["Cash And Cash Equivalents", "Cash Cash Equivalents And Short Term Investments", "Cash"]),
+        "Total Assets": _latest_value(balance_sheet, ["Total Assets"]),
+        "Previous Total Assets": _previous_value(balance_sheet, ["Total Assets"]),
+        "Total Liabilities": _latest_value(balance_sheet, ["Total Liabilities Net Minority Interest", "Total Liabilities"]),
+        "Stockholders Equity": _latest_value(balance_sheet, ["Stockholders Equity", "Total Stockholder Equity", "Common Stock Equity"]),
+        "Current Assets": _latest_value(balance_sheet, ["Current Assets", "Total Current Assets"]),
+        "Previous Current Assets": _previous_value(balance_sheet, ["Current Assets", "Total Current Assets"]),
+        "Current Liabilities": _latest_value(balance_sheet, ["Current Liabilities", "Total Current Liabilities"]),
+        "Previous Current Liabilities": _previous_value(balance_sheet, ["Current Liabilities", "Total Current Liabilities"]),
+        "Inventory": _latest_value(balance_sheet, ["Inventory", "Inventories"]),
+        "Retained Earnings": _latest_value(balance_sheet, ["Retained Earnings"]),
+        "Net Income": _latest_value(income_stmt, ["Net Income", "Net Income Common Stockholders"]),
+        "Previous Net Income": _previous_value(income_stmt, ["Net Income", "Net Income Common Stockholders"]),
+        "Gross Profit": _latest_value(income_stmt, ["Gross Profit"]),
+        "Previous Gross Profit": _previous_value(income_stmt, ["Gross Profit"]),
+        "Interest Expense": _latest_value(income_stmt, ["Interest Expense", "Net Interest Income"]),
+        "Operating Cash Flow": _latest_value(cashflow, ["Operating Cash Flow", "Total Cash From Operating Activities"]),
+        "Capital Expenditure": _latest_value(cashflow, ["Capital Expenditure", "Capital Expenditures"]),
+        "Free Cash Flow": _safe_info_value(info, "freeCashflow"),
+        "Earnings Growth": _safe_info_value(info, "earningsGrowth"),
+        "Revenue Growth Raw": _safe_info_value(info, "revenueGrowth"),
+        "Current Ratio Raw": _safe_info_value(info, "currentRatio"),
+        "Quick Ratio Raw": _safe_info_value(info, "quickRatio"),
+        "Debt To Equity Raw": _safe_info_value(info, "debtToEquity"),
+        "Return On Equity Raw": _safe_info_value(info, "returnOnEquity"),
+        "Gross Margins Raw": _safe_info_value(info, "grossMargins"),
+        "Operating Margins Raw": _safe_info_value(info, "operatingMargins"),
+        "Average Daily Volume": _safe_info_value(info, "averageVolume", "averageDailyVolume10Day"),
+        "Market Cap": _safe_info_value(info, "marketCap"),
+        "Current Price": _safe_info_value(info, "currentPrice", "regularMarketPrice"),
+        "Bid": _safe_info_value(info, "bid"),
+        "Ask": _safe_info_value(info, "ask"),
+        "Analyst Recommendation Score": _safe_info_value(info, "recommendationMean"),
+        "Target Mean Price": _safe_info_value(info, "targetMeanPrice"),
+        "Beta": _safe_info_value(info, "beta"),
+        "Diluted EPS Values": json.dumps(_row_numeric_values(income_stmt, ["Diluted EPS", "Basic EPS"])),
+    }
+    logger.info("Fetched advanced financial raw data successfully. ticker=%s fields=%s", ticker_symbol, len(raw_data) - 1)
+    return pd.DataFrame([raw_data])

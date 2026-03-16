@@ -1,6 +1,42 @@
 from config.logging_config import get_logger
 
 logger = get_logger(__name__)
+MISSING_VALUE = "--"
+
+
+def _normalize_numeric_or_missing(value):
+    if value in (None, "", MISSING_VALUE):
+        return MISSING_VALUE
+    try:
+        return MISSING_VALUE if float(value) != float(value) else float(value)
+    except Exception:
+        return MISSING_VALUE
+
+
+def _get_advanced_metric(metrics, key):
+    if metrics is None:
+        return MISSING_VALUE
+    if hasattr(metrics, "get"):
+        return metrics.get(key, MISSING_VALUE)
+    return MISSING_VALUE
+
+
+def _sum_modifiers(*modifiers):
+    total = 0.0
+    for modifier in modifiers:
+        normalized = _normalize_numeric_or_missing(modifier)
+        if normalized == MISSING_VALUE:
+            continue
+        total += float(normalized)
+    return total
+
+
+def _clamp_score(score, lower=-1.0, upper=1.0):
+    if score < lower:
+        return lower
+    if score > upper:
+        return upper
+    return score
 
 
 def get_ev_ebitda_modifier(ev_ebitda_ratio):
@@ -197,7 +233,308 @@ def get_enterprise_value_modifier(enterprise_value):
         return -0.125  # Small decrease for moderate risk
     else:  # Micro-sized companies
         return -0.25  # Larger decrease for high risk
-    
+
+
+def get_roic_modifier(roic):
+    roic = _normalize_numeric_or_missing(roic)
+    if roic == MISSING_VALUE:
+        return 0
+    if roic > 0.20:
+        return 0.10
+    if roic > 0.15:
+        return 0.05
+    if roic > 0.10:
+        return 0
+    if roic > 0.05:
+        return -0.05
+    return -0.10
+
+
+def get_roe_modifier(roe):
+    roe = _normalize_numeric_or_missing(roe)
+    if roe == MISSING_VALUE:
+        return 0
+    if roe > 0.25:
+        return 0.075
+    if roe > 0.15:
+        return 0.05
+    if roe > 0.08:
+        return 0
+    if roe > 0:
+        return -0.05
+    return -0.10
+
+
+def get_gross_margin_modifier(gross_margin):
+    gross_margin = _normalize_numeric_or_missing(gross_margin)
+    if gross_margin == MISSING_VALUE:
+        return 0
+    if gross_margin > 0.60:
+        return 0.05
+    if gross_margin > 0.40:
+        return 0.025
+    if gross_margin > 0.20:
+        return 0
+    if gross_margin > 0.10:
+        return -0.025
+    return -0.05
+
+
+def get_operating_margin_modifier(operating_margin):
+    operating_margin = _normalize_numeric_or_missing(operating_margin)
+    if operating_margin == MISSING_VALUE:
+        return 0
+    if operating_margin > 0.25:
+        return 0.075
+    if operating_margin > 0.15:
+        return 0.05
+    if operating_margin > 0.08:
+        return 0
+    if operating_margin > 0:
+        return -0.05
+    return -0.10
+
+
+def get_free_cash_flow_margin_modifier(free_cash_flow_margin):
+    free_cash_flow_margin = _normalize_numeric_or_missing(free_cash_flow_margin)
+    if free_cash_flow_margin == MISSING_VALUE:
+        return 0
+    if free_cash_flow_margin > 0.20:
+        return 0.075
+    if free_cash_flow_margin > 0.10:
+        return 0.05
+    if free_cash_flow_margin > 0.05:
+        return 0
+    if free_cash_flow_margin > 0:
+        return -0.05
+    return -0.10
+
+
+def get_debt_to_ebitda_modifier(debt_to_ebitda):
+    debt_to_ebitda = _normalize_numeric_or_missing(debt_to_ebitda)
+    if debt_to_ebitda == MISSING_VALUE:
+        return 0
+    if debt_to_ebitda < 1:
+        return 0.075
+    if debt_to_ebitda < 2:
+        return 0.05
+    if debt_to_ebitda < 3:
+        return 0
+    if debt_to_ebitda < 4:
+        return -0.05
+    return -0.10
+
+
+def get_interest_coverage_modifier(interest_coverage_ratio):
+    interest_coverage_ratio = _normalize_numeric_or_missing(interest_coverage_ratio)
+    if interest_coverage_ratio == MISSING_VALUE:
+        return 0
+    if interest_coverage_ratio > 8:
+        return 0.075
+    if interest_coverage_ratio > 4:
+        return 0.05
+    if interest_coverage_ratio > 2:
+        return 0
+    if interest_coverage_ratio > 1:
+        return -0.05
+    return -0.10
+
+
+def get_eps_growth_1y_modifier(eps_growth_1y):
+    eps_growth_1y = _normalize_numeric_or_missing(eps_growth_1y)
+    if eps_growth_1y == MISSING_VALUE:
+        return 0
+    if eps_growth_1y > 0.20:
+        return 0.10
+    if eps_growth_1y > 0.10:
+        return 0.05
+    if eps_growth_1y > 0:
+        return 0
+    if eps_growth_1y > -0.10:
+        return -0.05
+    return -0.10
+
+
+def get_eps_growth_5y_modifier(eps_growth_5y):
+    eps_growth_5y = _normalize_numeric_or_missing(eps_growth_5y)
+    if eps_growth_5y == MISSING_VALUE:
+        return 0
+    if eps_growth_5y > 0.20:
+        return 0.10
+    if eps_growth_5y > 0.10:
+        return 0.05
+    if eps_growth_5y > 0:
+        return 0
+    if eps_growth_5y > -0.05:
+        return -0.05
+    return -0.10
+
+
+def get_revenue_growth_modifier(revenue_growth):
+    revenue_growth = _normalize_numeric_or_missing(revenue_growth)
+    if revenue_growth == MISSING_VALUE:
+        return 0
+    if revenue_growth > 0.20:
+        return 0.075
+    if revenue_growth > 0.10:
+        return 0.05
+    if revenue_growth > 0:
+        return 0
+    if revenue_growth > -0.05:
+        return -0.05
+    return -0.10
+
+
+def get_ebitda_growth_modifier(ebitda_growth):
+    ebitda_growth = _normalize_numeric_or_missing(ebitda_growth)
+    if ebitda_growth == MISSING_VALUE:
+        return 0
+    if ebitda_growth > 0.20:
+        return 0.075
+    if ebitda_growth > 0.10:
+        return 0.05
+    if ebitda_growth > 0:
+        return 0
+    if ebitda_growth > -0.05:
+        return -0.05
+    return -0.10
+
+
+def get_current_ratio_modifier(current_ratio):
+    current_ratio = _normalize_numeric_or_missing(current_ratio)
+    if current_ratio == MISSING_VALUE:
+        return 0
+    if current_ratio > 2:
+        return 0.05
+    if current_ratio > 1.5:
+        return 0.025
+    if current_ratio > 1:
+        return 0
+    if current_ratio > 0.8:
+        return -0.05
+    return -0.10
+
+
+def get_quick_ratio_modifier(quick_ratio):
+    quick_ratio = _normalize_numeric_or_missing(quick_ratio)
+    if quick_ratio == MISSING_VALUE:
+        return 0
+    if quick_ratio > 1.5:
+        return 0.05
+    if quick_ratio > 1:
+        return 0.025
+    if quick_ratio > 0.8:
+        return 0
+    if quick_ratio > 0.6:
+        return -0.05
+    return -0.10
+
+
+def get_debt_to_equity_modifier(debt_to_equity):
+    debt_to_equity = _normalize_numeric_or_missing(debt_to_equity)
+    if debt_to_equity == MISSING_VALUE:
+        return 0
+    if debt_to_equity < 0.5:
+        return 0.05
+    if debt_to_equity < 1:
+        return 0.025
+    if debt_to_equity < 1.5:
+        return 0
+    if debt_to_equity < 2.5:
+        return -0.05
+    return -0.10
+
+
+def get_net_debt_to_ebitda_modifier(net_debt_to_ebitda):
+    net_debt_to_ebitda = _normalize_numeric_or_missing(net_debt_to_ebitda)
+    if net_debt_to_ebitda == MISSING_VALUE:
+        return 0
+    if net_debt_to_ebitda < 1:
+        return 0.05
+    if net_debt_to_ebitda < 2:
+        return 0.025
+    if net_debt_to_ebitda < 3:
+        return 0
+    if net_debt_to_ebitda < 4:
+        return -0.05
+    return -0.10
+
+
+def get_piotroski_f_score_modifier(piotroski_f_score):
+    piotroski_f_score = _normalize_numeric_or_missing(piotroski_f_score)
+    if piotroski_f_score == MISSING_VALUE:
+        return 0
+    if piotroski_f_score >= 8:
+        return 0.075
+    if piotroski_f_score >= 6:
+        return 0.05
+    if piotroski_f_score >= 4:
+        return 0
+    if piotroski_f_score >= 3:
+        return -0.05
+    return -0.10
+
+
+def get_altman_z_score_modifier(altman_z_score):
+    altman_z_score = _normalize_numeric_or_missing(altman_z_score)
+    if altman_z_score == MISSING_VALUE:
+        return 0
+    if altman_z_score > 3:
+        return 0.075
+    if altman_z_score > 2.2:
+        return 0.05
+    if altman_z_score > 1.8:
+        return 0
+    if altman_z_score > 1.2:
+        return -0.05
+    return -0.10
+
+
+def get_quality_factor_score(advanced_stats):
+    ticker = _get_advanced_metric(advanced_stats, "TICKER")
+    logger.info("Calculating quality score. ticker=%s", ticker)
+    score = _sum_modifiers(
+        get_roic_modifier(_get_advanced_metric(advanced_stats, "ROIC")),
+        get_roe_modifier(_get_advanced_metric(advanced_stats, "ROE")),
+        get_gross_margin_modifier(_get_advanced_metric(advanced_stats, "Gross Margin")),
+        get_operating_margin_modifier(_get_advanced_metric(advanced_stats, "Operating Margin")),
+        get_free_cash_flow_margin_modifier(_get_advanced_metric(advanced_stats, "Free Cash Flow Margin")),
+        get_debt_to_ebitda_modifier(_get_advanced_metric(advanced_stats, "Debt / EBITDA")),
+        get_interest_coverage_modifier(_get_advanced_metric(advanced_stats, "Interest Coverage Ratio")),
+        get_piotroski_f_score_modifier(_get_advanced_metric(advanced_stats, "Piotroski F-Score")),
+    )
+    score = _clamp_score(score)
+    logger.info("Calculated quality score. ticker=%s score=%s", ticker, score)
+    return score
+
+
+def get_earnings_growth_factor_score(advanced_stats):
+    ticker = _get_advanced_metric(advanced_stats, "TICKER")
+    logger.info("Calculating earnings growth score. ticker=%s", ticker)
+    score = _sum_modifiers(
+        get_eps_growth_1y_modifier(_get_advanced_metric(advanced_stats, "EPS Growth (1y)")),
+        get_eps_growth_5y_modifier(_get_advanced_metric(advanced_stats, "EPS Growth (5y)")),
+        get_revenue_growth_modifier(_get_advanced_metric(advanced_stats, "Revenue Growth")),
+        get_ebitda_growth_modifier(_get_advanced_metric(advanced_stats, "EBITDA Growth")),
+    )
+    score = _clamp_score(score)
+    logger.info("Calculated earnings growth score. ticker=%s score=%s", ticker, score)
+    return score
+
+
+def get_financial_strength_factor_score(advanced_stats):
+    ticker = _get_advanced_metric(advanced_stats, "TICKER")
+    logger.info("Calculating financial strength score. ticker=%s", ticker)
+    score = _sum_modifiers(
+        get_current_ratio_modifier(_get_advanced_metric(advanced_stats, "Current Ratio")),
+        get_quick_ratio_modifier(_get_advanced_metric(advanced_stats, "Quick Ratio")),
+        get_debt_to_equity_modifier(_get_advanced_metric(advanced_stats, "Debt / Equity")),
+        get_net_debt_to_ebitda_modifier(_get_advanced_metric(advanced_stats, "Net Debt / EBITDA")),
+        get_altman_z_score_modifier(_get_advanced_metric(advanced_stats, "Altman Z-Score")),
+    )
+    score = _clamp_score(score)
+    logger.info("Calculated financial strength score. ticker=%s score=%s", ticker, score)
+    return score
 
 def get_fundamental_analysis(df_stats):
     ticker = df_stats.get('TICKER', 'UNKNOWN') if hasattr(df_stats, 'get') else 'UNKNOWN'
