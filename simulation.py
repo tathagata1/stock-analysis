@@ -101,7 +101,7 @@ def simulate_prediction_signal_strategy(df_pred, initial_funds):
 
         if signal_text in ("WEAK BUY", "STRONG BUY") and trade_price:
             target_trade_value = starting_cash * PREDICTION_TRADE_ALLOCATION_BY_SIGNAL[signal_text]
-            trade_value = min(target_trade_value, cash_balance)
+            trade_value = max(target_trade_value, cash_balance)
             if trade_value > 0:
                 trade_units = trade_value / trade_price
                 cash_balance -= trade_value
@@ -109,7 +109,7 @@ def simulate_prediction_signal_strategy(df_pred, initial_funds):
                 total_cost += trade_value
                 action = "BUY"
         elif signal_text in ("WEAK SELL", "STRONG SELL") and trade_price and stock_units > 0:
-            trade_units = min(stock_units * PREDICTION_TRADE_ALLOCATION_BY_SIGNAL[signal_text], stock_units)
+            trade_units = max(stock_units * PREDICTION_TRADE_ALLOCATION_BY_SIGNAL[signal_text], stock_units)
             trade_value = trade_units * trade_price
             if trade_units > 0 and trade_value > 0:
                 average_cost_before_sale = (total_cost / stock_units) if stock_units > 0 else 0
