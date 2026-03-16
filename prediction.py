@@ -5,15 +5,9 @@ import fundamental_analysis
 import sentiment_analysis
 import technical_analysis
 
-TECHNICAL_SIGNAL_WEIGHT = 0.70
-SENTIMENT_SIGNAL_WEIGHT = 0.30
-SIGNAL_MAPPING = {
-    "STRONG SELL": -2,
-    "WEAK SELL": -1,
-    "HOLD": 0,
-    "WEAK BUY": 1,
-    "STRONG BUY": 2,
-}
+import config
+
+SIGNAL_MAPPING = {"STRONG SELL": -2,"WEAK SELL": -1,"HOLD": 0,"WEAK BUY": 1,"STRONG BUY": 2,}
 
 def apply_sentiment_analysis(stock):
     payloads = sentiment_analysis.get_news_sentiment(
@@ -46,23 +40,24 @@ def get_prediction(df, stats=None, include_sentiment=True):
 
 def add_total_signal(df):
     technical_signal = df['technical_analysis_buy_score'] + df['technical_analysis_sell_score']
-    sentiment_signal = df.get('sentiment_analysis_score', 0)
+    sentiment_signal = df['sentiment_analysis_score']
+    fundamental_signal = df['fundamental_analysis_score']
 
     df['Signal'] = (
-        (technical_signal * TECHNICAL_SIGNAL_WEIGHT)
-        + (sentiment_signal * SENTIMENT_SIGNAL_WEIGHT)
-        + df.get('fundamental_analysis_score', 0)
+        (technical_signal * config.TECHNICAL_SIGNAL_WEIGHT)
+        + (sentiment_signal * config.SENTIMENT_SIGNAL_WEIGHT)
+        + (fundamental_signal * config.FUNDAMENTAL_SIGNAL_WEIGHT)
     )
     return df
 
 
 def convert_signal_to_text(df):
     conditions = [
-        (df['Signal'] <= -0.9),
-        (df['Signal'] > -0.9) & (df['Signal'] < -0.7),
-        (df['Signal'] >= -0.7) & (df['Signal'] < 0.7),
-        (df['Signal'] >= 0.7) & (df['Signal'] < 0.9),
-        (df['Signal'] >= 0.9),
+        (df['Signal'] <= -1.5),
+        (df['Signal'] > -1.5) & (df['Signal'] < -0.5),
+        (df['Signal'] >= -0.5) & (df['Signal'] < 0.05),
+        (df['Signal'] >= 0.5) & (df['Signal'] < 1.5),
+        (df['Signal'] >= 1.5),
     ]
     choices = ['STRONG SELL', 'WEAK SELL', 'HOLD', 'WEAK BUY', 'STRONG BUY']
     df['Signal_Text'] = np.select(conditions, choices, default='HOLD')

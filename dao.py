@@ -5,6 +5,7 @@ from email.utils import parsedate_to_datetime
 from io import StringIO
 from urllib.parse import quote_plus
 import xml.etree.ElementTree as ET
+import os
 
 import pandas as pd
 import requests
@@ -13,10 +14,11 @@ from openai import OpenAI
 
 import config
 
-try:
-    import yfinance as yf
-except ImportError:  # pragma: no cover - handled at runtime in helper
-    yf = None
+import json
+from pathlib import Path
+import yfinance as yf
+
+
 
 
 REQUEST_HEADERS = {
@@ -340,3 +342,74 @@ def get_news_post(link):
     except Exception as exc:
         logging.error("Error in get_news_post for %s: %s", link, exc)
         return None
+
+
+def _index_ticker_cache_path(index_name, cache_dir=config.DEFAULT_CACHE_DIR):
+    cache_path = Path(cache_dir)
+    cache_path.mkdir(parents=True, exist_ok=True)
+    return cache_path / f"{index_name.lower()}_tickers.json"
+
+
+def _read_cached_tickers(cache_file):
+    payload = json.loads(cache_file.read_text(encoding="utf-8"))
+    if isinstance(payload, dict):
+        tickers = payload.get("tickers", [])
+    elif isinstance(payload, list):
+        tickers = payload
+    else:
+        tickers = []
+    return [str(t).strip() for t in tickers if str(t).strip()]
+
+
+def get_index_tickers_cached(index_name="sp500", limit=None, cache_dir=config.DEFAULT_CACHE_DIR, max_age_hours=config.DEFAULT_INDEX_CACHE_MAX_AGE_HOURS):
+    cache_file = _index_ticker_cache_path(index_name, cache_dir=cache_dir)
+    now = datetime.now().timestamp()
+    max_age_seconds = max_age_hours * 3600
+    cache_used = False
+    cache_deleted = False
+    tickers = []
+
+    if cache_file.exists():
+        cache_age_seconds = now - cache_file.stat().st_mtime
+        if cache_age_seconds < max_age_seconds:
+            try:
+                tickers = _read_cached_tickers(cache_file)
+                cache_used = True
+            except Exception:
+                cache_file.unlink(missing_ok=True)
+                cache_deleted = True
+        else:
+            cache_file.unlink(missing_ok=True)
+            cache_deleted = True
+
+    if not cache_used:
+        tickers = get_index_constituents(index_name)
+        payload = {
+            "index_name": index_name,
+            "fetched_at": datetime.now().isoformat(timespec="seconds"),
+            "tickers": tickers,
+        }
+        cache_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    if limit is not None:
+        tickers = tickers[:limit]
+
+    cache_age_seconds = None
+    if cache_file.exists():
+        cache_age_seconds = max(0, datetime.now().timestamp() - cache_file.stat().st_mtime)
+
+    cache_meta = {
+        "cache_file": str(cache_file),
+        "cache_used": cache_used,
+        "cache_deleted": cache_deleted,
+        "max_age_hours": max_age_hours,
+        "cache_age_hours": None if cache_age_seconds is None else round(cache_age_seconds / 3600, 3),
+    }
+    return tickers, cache_meta
+
+
+def get_index_tickers(index_name="sp500", limit=None):
+    tickers = get_index_constituents(index_name)
+    if limit is None:
+        return tickers
+    return tickers[:limit]

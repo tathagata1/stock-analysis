@@ -1,18 +1,17 @@
-import json
+
 from datetime import datetime
-from pathlib import Path
+
 
 import pandas as pd
 
 import dao
 import prediction
 import simulation
+import config
 
 
-DEFAULT_SIGNAL_LOOKBACK_START = 1
-DEFAULT_SIGNAL_LOOKBACK_END = 30
-DEFAULT_CACHE_DIR = "cache"
-DEFAULT_INDEX_CACHE_MAX_AGE_HOURS = 24
+
+
 
 
 def _safe_float(value):
@@ -35,102 +34,21 @@ def load_portfolio(portfolio_path):
     return dao.read_json(portfolio_path)
 
 
-def _index_ticker_cache_path(index_name, cache_dir=DEFAULT_CACHE_DIR):
-    cache_path = Path(cache_dir)
-    cache_path.mkdir(parents=True, exist_ok=True)
-    return cache_path / f"{index_name.lower()}_tickers.json"
-
-
-def _read_cached_tickers(cache_file):
-    payload = json.loads(cache_file.read_text(encoding="utf-8"))
-    if isinstance(payload, dict):
-        tickers = payload.get("tickers", [])
-    elif isinstance(payload, list):
-        tickers = payload
-    else:
-        tickers = []
-    return [str(t).strip() for t in tickers if str(t).strip()]
-
-
-def get_index_tickers_cached(index_name="sp500", limit=None, cache_dir=DEFAULT_CACHE_DIR, max_age_hours=DEFAULT_INDEX_CACHE_MAX_AGE_HOURS):
-    cache_file = _index_ticker_cache_path(index_name, cache_dir=cache_dir)
-    now = datetime.now().timestamp()
-    max_age_seconds = max_age_hours * 3600
-    cache_used = False
-    cache_deleted = False
-    tickers = []
-
-    if cache_file.exists():
-        cache_age_seconds = now - cache_file.stat().st_mtime
-        if cache_age_seconds < max_age_seconds:
-            try:
-                tickers = _read_cached_tickers(cache_file)
-                cache_used = True
-            except Exception:
-                cache_file.unlink(missing_ok=True)
-                cache_deleted = True
-        else:
-            cache_file.unlink(missing_ok=True)
-            cache_deleted = True
-
-    if not cache_used:
-        tickers = dao.get_index_constituents(index_name)
-        payload = {
-            "index_name": index_name,
-            "fetched_at": datetime.now().isoformat(timespec="seconds"),
-            "tickers": tickers,
-        }
-        cache_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-    if limit is not None:
-        tickers = tickers[:limit]
-
-    cache_age_seconds = None
-    if cache_file.exists():
-        cache_age_seconds = max(0, datetime.now().timestamp() - cache_file.stat().st_mtime)
-
-    cache_meta = {
-        "cache_file": str(cache_file),
-        "cache_used": cache_used,
-        "cache_deleted": cache_deleted,
-        "max_age_hours": max_age_hours,
-        "cache_age_hours": None if cache_age_seconds is None else round(cache_age_seconds / 3600, 3),
-    }
-    return tickers, cache_meta
-
-
-def get_index_tickers(index_name="sp500", limit=None):
-    tickers = dao.get_index_constituents(index_name)
-    if limit is None:
-        return tickers
-    return tickers[:limit]
-
-
-def _build_prediction_and_stats(ticker, include_sentiment=False):
+def build_prediction_and_stats(ticker, include_sentiment=False):
     df_5y = pd.DataFrame(dao.get_yahoo_finance_5y(ticker))
     if df_5y.empty:
         raise ValueError(f"No history returned for {ticker}")
-
-    stats_row = pd.DataFrame(dao.get_yahoo_finance_key_stats(ticker)).iloc[0]
     df_pred = prediction.get_prediction(
         df_5y,
-        stats=stats_row,
+        stats=pd.DataFrame(dao.get_yahoo_finance_key_stats(ticker)).iloc[0],
         include_sentiment=include_sentiment,
     )
     df_pred = prediction.add_total_signal(df_pred)
     df_pred = prediction.convert_signal_to_text(df_pred)
-    return df_pred, stats_row
-
-
-def build_prediction_frame(ticker, include_sentiment=False):
-    df_pred, _ = _build_prediction_and_stats(
-        ticker,
-        include_sentiment=include_sentiment,
-    )
     return df_pred
 
 
-def get_recent_weighted_signal(df_pred, start_iloc=DEFAULT_SIGNAL_LOOKBACK_START, end_iloc=DEFAULT_SIGNAL_LOOKBACK_END):
+def get_recent_weighted_signal(df_pred, start_iloc=config.DEFAULT_SIGNAL_LOOKBACK_START, end_iloc=config.DEFAULT_SIGNAL_LOOKBACK_END):
     signals = df_pred["Signal_Text"].iloc[start_iloc:end_iloc + 1].reset_index(drop=True)
     signal_text, signal_number = prediction.get_weighted_signal(signals)
     return {
@@ -141,7 +59,7 @@ def get_recent_weighted_signal(df_pred, start_iloc=DEFAULT_SIGNAL_LOOKBACK_START
 
 
 def build_stock_analysis(ticker, include_sentiment=False):
-    df_pred, stats_row = _build_prediction_and_stats(
+    df_pred, stats_row = build_prediction_and_stats(
         ticker,
         include_sentiment=include_sentiment,
     )
@@ -267,18 +185,18 @@ def run_index_search_workflow(
     limit=50,
     include_sentiment=False,
     use_ticker_cache=True,
-    ticker_cache_dir=DEFAULT_CACHE_DIR,
-    ticker_cache_max_age_hours=DEFAULT_INDEX_CACHE_MAX_AGE_HOURS,
+    ticker_cache_dir=config.DEFAULT_CACHE_DIR,
+    ticker_cache_max_age_hours=config.DEFAULT_INDEX_CACHE_MAX_AGE_HOURS,
 ):
     if use_ticker_cache:
-        tickers, ticker_cache = get_index_tickers_cached(
+        tickers, ticker_cache = dao.get_index_tickers_cached(
             index_name=index_name,
             limit=limit,
             cache_dir=ticker_cache_dir,
             max_age_hours=ticker_cache_max_age_hours,
         )
     else:
-        tickers = get_index_tickers(index_name=index_name, limit=limit)
+        tickers = dao.get_index_tickers(index_name=index_name, limit=limit)
         ticker_cache = None
     analyses = {}
     prediction_rows = []
