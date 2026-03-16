@@ -24,6 +24,17 @@ EXPLORATORY_SELL_ALLOCATION_BY_SIGNAL = {
     "STRONG SELL": 0.30,
     "WEAK SELL": 0.15,
 }
+PREDICTION_TRANSACTION_COLUMNS = [
+    "Date",
+    "action",
+    "signal_text",
+    "trade_price",
+    "units",
+    "trade_value",
+    "cash_balance",
+    "units_held",
+    "portfolio_value",
+]
 
 
 def _safe_float(value):
@@ -159,7 +170,7 @@ def simulate_prediction_signal_strategy(df_pred, initial_funds):
             })
 
     daily_history = pd.DataFrame(daily_rows)
-    transactions_frame = pd.DataFrame(transactions)
+    transactions_frame = pd.DataFrame(transactions, columns=PREDICTION_TRANSACTION_COLUMNS)
     latest_row = daily_history.iloc[-1]
 
     return {
