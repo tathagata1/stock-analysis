@@ -43,8 +43,8 @@ def build_stock_analysis(ticker, include_sentiment=False):
     }
 
 def run_index_search_workflow(
-    index_name="sp500",
-    limit=50,
+    index_name,
+    limit,
     include_sentiment=False,
     use_ticker_cache=True,
     ticker_cache_dir=config.DEFAULT_CACHE_DIR,
@@ -60,8 +60,10 @@ def run_index_search_workflow(
     else:
         tickers = dao.get_index_tickers(index_name=index_name, limit=limit)
         ticker_cache = None
+        
     analyses = {}
     prediction_rows = []
+    
     for ticker in tickers:
         analysis = build_stock_analysis(
             ticker,
