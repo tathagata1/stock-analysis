@@ -11,7 +11,7 @@ from config.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-MISSING_VALUE = 0.0
+MISSING_VALUE = "--"
 TRADING_DAYS_PER_YEAR = 252
 MULTIFACTOR_WEIGHTS = {
     "value": 0.30,
@@ -40,6 +40,10 @@ def _normalize_numeric_or_missing(value):
 def _get_metric(metrics, key):
     if metrics is None:
         return MISSING_VALUE
+    if isinstance(metrics, pd.DataFrame):
+        if metrics.empty or key not in metrics.columns:
+            return MISSING_VALUE
+        return metrics.iloc[0][key]
     if hasattr(metrics, "get"):
         return metrics.get(key, MISSING_VALUE)
     return MISSING_VALUE
