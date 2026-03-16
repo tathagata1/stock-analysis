@@ -11,7 +11,7 @@ from config.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-MISSING_VALUE = "--"
+MISSING_VALUE = 0.0
 TRADING_DAYS_PER_YEAR = 252
 MULTIFACTOR_WEIGHTS = {
     "value": 0.30,
@@ -61,6 +61,24 @@ def _sum_modifiers(*modifiers):
             continue
         total += float(normalized)
     return total
+
+
+def _parse_json_float_list(payload):
+    if not isinstance(payload, str) or not payload:
+        return []
+    try:
+        parsed = json.loads(payload)
+    except Exception:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    values = []
+    for item in parsed:
+        try:
+            values.append(float(item))
+        except Exception:
+            continue
+    return values
 
 
 def _safe_info_value(info, *keys):
@@ -473,9 +491,9 @@ def get_price_momentum_factor_score(price_history):
     six_month_return = _return_over_window(price_history, 126)
     twelve_month_return = _return_over_window(price_history, 252)
     momentum_composite = _sum_modifiers(
-        0.5 * twelve_month_return if _normalize_numeric_or_missing(twelve_month_return) != MISSING_VALUE else 0,
-        0.3 * six_month_return if _normalize_numeric_or_missing(six_month_return) != MISSING_VALUE else 0,
-        0.2 * three_month_return if _normalize_numeric_or_missing(three_month_return) != MISSING_VALUE else 0,
+        0.5 * float(twelve_month_return) if _normalize_numeric_or_missing(twelve_month_return) != MISSING_VALUE else 0,
+        0.3 * float(six_month_return) if _normalize_numeric_or_missing(six_month_return) != MISSING_VALUE else 0,
+        0.2 * float(three_month_return) if _normalize_numeric_or_missing(three_month_return) != MISSING_VALUE else 0,
     )
     score = _clamp_score(get_momentum_modifier(momentum_composite))
     logger.info("Calculated price momentum score. ticker=%s score=%s", ticker, score)
@@ -539,7 +557,7 @@ def get_analyst_sentiment_factor_score(advanced_stats):
     return score
 
 
-def calculate_multifactor_model(price_history, value_stats, advanced_stats, sentiment_score=0):
+def calculate_multifactor_model(price_history, value_stats, advanced_stats, sentiment_score: float = 0.0):
     ticker = price_history["TICKER"].iloc[0] if not price_history.empty and "TICKER" in price_history.columns else _get_metric(advanced_stats, "TICKER")
     logger.info("Calculating multi-factor model. ticker=%s", ticker)
 
@@ -592,7 +610,7 @@ def calculate_multifactor_model(price_history, value_stats, advanced_stats, sent
     return result
 
 
-def calculate_multifactor_model_frame(price_history, value_stats, advanced_stats, sentiment_score=0):
+def calculate_multifactor_model_frame(price_history, value_stats, advanced_stats, sentiment_score: float = 0.0):
     return pd.DataFrame([calculate_multifactor_model(price_history, value_stats, advanced_stats, sentiment_score=sentiment_score)])
 
 
@@ -659,13 +677,12 @@ def derive_advanced_financial_metrics(raw_financial_data):
     free_cash_flow_margin = _safe_ratio(free_cash_flow, total_revenue)
     debt_to_ebitda = _safe_ratio(total_debt, ebitda)
     interest_coverage = _safe_ratio(operating_income, abs(float(interest_expense)) if _normalize_numeric_or_missing(interest_expense) != MISSING_VALUE else MISSING_VALUE)
+    diluted_eps_payload = raw_financial_data.get("Diluted EPS Values") if hasattr(raw_financial_data, "get") else None
+    eps_values = _parse_json_float_list(diluted_eps_payload)
     eps_growth_1y = _get_metric(raw_financial_data, "Earnings Growth")
     if eps_growth_1y == MISSING_VALUE:
-        eps_values = json.loads(_get_metric(raw_financial_data, "Diluted EPS Values")) if _get_metric(raw_financial_data, "Diluted EPS Values") != MISSING_VALUE else []
         if len(eps_values) >= 2:
             eps_growth_1y = _safe_growth(eps_values[0], eps_values[1])
-    else:
-        eps_values = json.loads(_get_metric(raw_financial_data, "Diluted EPS Values")) if _get_metric(raw_financial_data, "Diluted EPS Values") != MISSING_VALUE else []
     eps_growth_5y = MISSING_VALUE
     if len(eps_values) >= 5:
         eps_growth_5y = _safe_cagr(eps_values[0], eps_values[4], 4)
@@ -757,7 +774,7 @@ def build_multifactor_analysis(ticker, period="1y", include_sentiment=False):
     value_stats = pd.DataFrame(dao.get_yahoo_finance_key_stats(ticker)).iloc[0]
     raw_advanced_data = pd.DataFrame(dao.get_advanced_financial_metrics(ticker)).iloc[0]
     advanced_stats = derive_advanced_financial_metrics(raw_advanced_data).iloc[0]
-    sentiment_score = sentiment_analysis.apply_sentiment_analysis(ticker) if include_sentiment else 0
+    sentiment_score: float = sentiment_analysis.apply_sentiment_analysis(ticker) if include_sentiment else 0.0
     score_frame = calculate_multifactor_model_frame(
         price_history=price_history,
         value_stats=value_stats,
