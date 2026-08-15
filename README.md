@@ -2,7 +2,7 @@
 
 An opinionated research sandbox for turning raw market data into actionable stock signals.
 
-This project combines technical indicators, valuation screens, point-in-time-inspired fundamentals, sentiment scoring, and multi-factor ranking into a notebook-first workflow for stock research. It is built for fast iteration: inspect a single name, then scale the same logic across entire indexes.
+This project combines technical indicators, valuation screens, point-in-time-inspired fundamentals, sentiment scoring, and multi-factor ranking into a notebook-first workflow for stock research. It is built for fast iteration: inspect a single name, then scale the same logic across entire indexes. 
 
 ## Mission
 
