@@ -6,24 +6,7 @@ from config.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-MAX_REDDIT_POSTS_FOR_SENTIMENT = 10
 MAX_NEWS_ARTICLES_FOR_SENTIMENT = 10
-
-def get_reddit_sentiment(stock, gpt_resp):
-    logger.info("Collecting Reddit sentiment. ticker=%s", stock)
-    reddit_links=dao.get_reddit_links(stock)
-    if reddit_links is not None:
-        posts = []
-        
-        for link in reddit_links[:MAX_REDDIT_POSTS_FOR_SENTIMENT]:
-            posts.append(dao.get_reddit_post(link))
-        
-        if posts is not None:    
-            for post in posts:
-                if post:
-                    gpt_resp.append(dao.get_gpt_score_with_confidence(stock, post))
-    logger.info("Collected Reddit sentiment payloads. ticker=%s payload_count=%s", stock, len(gpt_resp))
-    return gpt_resp
 
 def get_news_sentiment(stock, gpt_resp):
     logger.info("Collecting news sentiment. ticker=%s", stock)
@@ -62,10 +45,7 @@ def get_news_sentiment(stock, gpt_resp):
 
 def apply_sentiment_analysis(stock):
     logger.info("Running sentiment analysis. ticker=%s", stock)
-    payloads = get_news_sentiment(
-        stock,
-        get_reddit_sentiment(stock, []),
-    )
+    payloads = get_news_sentiment(stock, [])
     try:
         scores = [
             float(item["score"])

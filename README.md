@@ -38,7 +38,7 @@ For an individual ticker, the project can:
 - Score bullish and bearish technical conditions.
 - Pull key valuation statistics and convert them into a fundamental score.
 - Derive expanded financial quality, growth, risk, and balance-sheet metrics from statements.
-- Optionally layer in sentiment from Reddit and recent news using OpenAI scoring.
+- Optionally layer in sentiment from recent news using OpenAI scoring.
 - Blend everything into a final numeric signal and a human-readable label:
   `STRONG SELL`, `WEAK SELL`, `HOLD`, `WEAK BUY`, `STRONG BUY`.
 
@@ -136,7 +136,6 @@ The data access layer. It is responsible for:
 - Yahoo Finance key stats
 - advanced statement-derived financial inputs
 - Google News RSS ingestion
-- Reddit post collection
 - OpenAI sentiment scoring requests
 - index constituent collection and caching
 
@@ -146,7 +145,7 @@ The core analytics engine.
 
 - `technical_analysis.py`: momentum, trend, volatility, and volume indicators
 - `fundamental_analysis.py`: valuation, quality, growth, and financial-strength scoring
-- `sentiment_analysis.py`: Reddit/news ingestion and sentiment aggregation
+- `sentiment_analysis.py`: news ingestion and sentiment aggregation
 - `multifactor_analysis.py`: composite factor model with weighted ranking outputs
 
 ### `analysis_types/`
@@ -380,7 +379,7 @@ Natural next steps for the project:
 
 - This project is best described as a research and experimentation engine, not a production trading system.
 - Sentiment analysis requires an OpenAI API key and adds latency and cost.
-- External data quality depends on Yahoo Finance, Google News RSS, Reddit, and page parsing stability.
+- External data quality depends on Yahoo Finance, Google News RSS, and page parsing stability.
 - Financial signals are heuristic and should be validated before capital is allocated.
 
 ## Disclaimer

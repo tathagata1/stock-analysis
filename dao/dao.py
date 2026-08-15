@@ -233,7 +233,6 @@ def get_gpt_score_with_confidence(stock, post):
     try:
         os.environ['OPENAI_API_KEY'] = config.chatgpt_key
         client = OpenAI()
-        #command='you need to analyse the following reddit post for '+stock+'. you need to respond in the format { "score": "VAR_X", "confidence": "VAR_Y" }. VAR_X can vary from -1.000 to +1.0000. VAR_Y will be your confidence on the buy/sell indication and will vary between 0.00 and 1.00. I do not need anything else other than { "score": "VAR_X", "confidence": "VAR_Y" }. Here is the text: '+post
         command="""You are a financial sentiment and trading-signal analysis engine.
                     Task:
                     Analyse the following text about the stock:"""+stock+""".
@@ -379,63 +378,6 @@ def get_yahoo_finance_key_stats(var_stock):
         row = {display_name: "--" for display_name in STAT_FIELD_MAP}
         row['TICKER'] = var_stock
         return pd.DataFrame([row])
-
-
-def get_reddit_links(var_stock):
-    logger.info("Fetching Reddit links. ticker=%s", var_stock)
-    try:
-        query = quote_plus(var_stock)
-        url = f"{config.reddit_url}/search.json?q={query}&sort=new&limit=10"
-        response = _safe_request(url)
-        response.raise_for_status()
-        payload = response.json()
-
-        comment_links = []
-        children = payload.get('data', {}).get('children', [])
-        for child in children:
-            data = child.get('data', {})
-            permalink = data.get('permalink')
-            if permalink:
-                comment_links.append(config.reddit_url + permalink)
-        logger.info("Fetched Reddit links successfully. ticker=%s link_count=%s", var_stock, len(comment_links[:10]))
-        return comment_links[:10]
-    except Exception as exc:
-        logger.exception("Failed to fetch Reddit links. ticker=%s", var_stock)
-        return None
-
-
-def get_reddit_post(link):
-    logger.info("Fetching Reddit post body. link=%s", link)
-    try:
-        json_url = link.rstrip('/') + '.json'
-        response = _safe_request(json_url)
-        response.raise_for_status()
-        payload = response.json()
-
-        pieces = []
-        if isinstance(payload, list) and payload:
-            post_children = payload[0].get('data', {}).get('children', [])
-            if post_children:
-                post_data = post_children[0].get('data', {})
-                pieces.extend([
-                    str(post_data.get('title', '')),
-                    str(post_data.get('selftext', '')),
-                ])
-
-            if len(payload) > 1:
-                comment_children = payload[1].get('data', {}).get('children', [])
-                for child in comment_children[:15]:
-                    body = child.get('data', {}).get('body')
-                    if body:
-                        pieces.append(str(body))
-
-        text = ' '.join(piece for piece in pieces if piece).replace("'", "")
-        logger.info("Fetched Reddit post body successfully. link=%s text_length=%s", link, len(text or ""))
-        return text if text else None
-
-    except Exception as exc:
-        logger.exception("Failed to fetch Reddit post body. link=%s", link)
-        return None
 
 
 def get_news_links(stock):

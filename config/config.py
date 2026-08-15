@@ -8,8 +8,6 @@ chatgpt_key=config['API']['chatgpt_key']
 
 google_news_rss_url=config['Selenium']['google_news_rss_url']
 
-reddit_url=config['Selenium']['redditURL']
-
 sma1=int(config['SimpleMovingAverage']['SMA1'])
 sma2=int(config['SimpleMovingAverage']['SMA2'])
 
