@@ -1,8 +1,47 @@
-portfolio/*
-cache/*
-output/*
-__pycache__
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Package and test output
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
 config/config.ini
-logs/*
+
+# Generated project data
+portfolio/
+cache/
+output/
+logs/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.vs/
+.DS_Store
+Thumbs.db
+
+# Local documentation files
 *.md
 !README.md
