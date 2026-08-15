@@ -2,7 +2,7 @@
 
 An opinionated research sandbox for turning raw market data into actionable stock signals.
 
-This project combines technical indicators, valuation screens, point-in-time-inspired fundamentals, sentiment scoring, and multi-factor ranking into a notebook-first workflow for stock research. It is built for fast iteration: inspect a single name, simulate decisions, then scale the same logic across entire indexes.
+This project combines technical indicators, valuation screens, point-in-time-inspired fundamentals, sentiment scoring, and multi-factor ranking into a notebook-first workflow for stock research. It is built for fast iteration: inspect a single name, then scale the same logic across entire indexes.
 
 ## Mission
 
@@ -13,8 +13,8 @@ Build a practical market intelligence engine that helps surface conviction faste
 Evolve this codebase into a serious retail-to-pro research platform:
 
 - A place where price action, business quality, valuation, and market narrative are scored in one system.
-- A repeatable workflow for moving from idea generation to signal validation to portfolio action.
-- A modular base for future automation, dashboards, backtests, portfolio overlays, and factor research.
+- A repeatable workflow for moving from idea generation to explainable signal ranking.
+- A modular base for future automation, dashboards, portfolio overlays, and factor research.
 
 ## Why This Project Exists
 
@@ -42,20 +42,7 @@ For an individual ticker, the project can:
 - Blend everything into a final numeric signal and a human-readable label:
   `STRONG SELL`, `WEAK SELL`, `HOLD`, `WEAK BUY`, `STRONG BUY`.
 
-### 2. Trading simulation
-
-The simulation workflow tests what would have happened if you had followed the generated signals over time.
-
-It tracks:
-
-- buy and sell decisions,
-- cash balance,
-- units held,
-- average cost basis,
-- portfolio value,
-- total profit and loss.
-
-### 3. Index-wide screening
+### 2. Index-wide screening
 
 The index search workflow expands the same logic across major benchmarks and ranks constituents by signal strength.
 
@@ -101,8 +88,6 @@ When those signals align, the result should be more meaningful than any single f
 
 ```text
 stock analysis/
-|-- 01_specific_stock_minima_maxima.ipynb
-|-- 02_specific_stock_simulation.ipynb
 |-- 03_index_search.ipynb
 |-- analysis_functions/
 |   |-- technical_analysis.py
@@ -114,7 +99,6 @@ stock analysis/
 |   |-- interface_index_search.py
 |-- analysis_types/
 |   |-- prediction.py
-|   |-- simulation.py
 |-- dao/
 |   |-- dao.py
 |-- config/
@@ -153,38 +137,15 @@ The core analytics engine.
 The transformation layer between raw analytics and usable outputs.
 
 - `prediction.py`: builds the end-to-end prediction frame and final signal
-- `simulation.py`: converts signals into trading simulations and portfolio traces
 
 ### `analysis_interfaces/`
 
 The notebook-facing orchestration layer.
 
-- `interface_specific_stock.py`: single ticker analysis and simulation helpers
+- `interface_specific_stock.py`: single ticker analysis helpers
 - `interface_index_search.py`: index scan and ranking workflows
 
 ## Notebook Workflows
-
-### `01_specific_stock_minima_maxima.ipynb`
-
-Focused single-name analysis. The notebook currently shows a quick research workflow around a chosen ticker, with a short-period setup suited for recent signal inspection.
-
-Example parameters already present in the notebook:
-
-- `ticker = "NVDA"`
-- `initial_funds = 100`
-- `include_sentiment = False`
-- `period = "5d"`
-
-### `02_specific_stock_simulation.ipynb`
-
-Single-stock strategy simulation over a longer window.
-
-Example parameters already present in the notebook:
-
-- `ticker = "TSLA"`
-- `initial_funds = 100`
-- `include_sentiment = False`
-- `period = "1y"`
 
 ### `03_index_search.ipynb`
 
@@ -263,7 +224,7 @@ The prediction pipeline includes a point-in-time-style financial snapshot proces
 - applies availability lags to approximate when reports would have been known,
 - maps market observations to the latest available fundamentals at that point in time.
 
-That is a meaningful upgrade over simplistic backtests that leak future information into old decisions.
+This prevents historical observations from being enriched with financial information that had not been published yet.
 
 ## Tech Stack
 
@@ -271,7 +232,6 @@ That is a meaningful upgrade over simplistic backtests that leak future informat
 - Jupyter Notebook
 - pandas
 - numpy
-- matplotlib
 - yfinance
 - requests
 - BeautifulSoup (`bs4`)
@@ -289,10 +249,11 @@ python -m venv .venv
 
 ### 2. Install dependencies
 
-There is no pinned `requirements.txt` yet, so install the libraries used by the codebase directly:
+Install the runtime dependencies, then add Jupyter Notebook for the notebook workflow:
 
 ```powershell
-pip install pandas numpy matplotlib yfinance requests beautifulsoup4 openai lxml html5lib notebook
+pip install -r requirements.txt
+pip install notebook
 ```
 
 ### 3. Configure the project
@@ -312,17 +273,13 @@ Then update `config/config.ini` with your local settings, especially:
 
 ## How To Run
 
-Launch Jupyter and open any of the three notebooks:
+Launch Jupyter and open the index-search notebook:
 
 ```powershell
 jupyter notebook
 ```
 
-Suggested progression:
-
-1. Start with `01_specific_stock_minima_maxima.ipynb` to inspect a single ticker.
-2. Move to `02_specific_stock_simulation.ipynb` to evaluate signal-driven trading behavior.
-3. Use `03_index_search.ipynb` to scan broader universes and rank opportunities.
+Open `03_index_search.ipynb` to scan supported indexes and rank opportunities. The single-stock analysis pipeline is also available through `analysis_interfaces/interface_specific_stock.py`.
 
 ## Outputs and Operational Folders
 
@@ -355,10 +312,9 @@ This repository already has the bones of a much bigger system:
 - a modular analytics core,
 - reusable workflow interfaces,
 - a scoring framework instead of hard-coded one-off decisions,
-- simulation support,
 - index-level batch processing,
 - local caching and logging,
-- a clean path toward APIs, dashboards, backtests, and scheduled jobs.
+- a clean path toward APIs, dashboards, and scheduled jobs.
 
 In other words: this is not just a collection of notebooks. It is the early-stage operating system for a serious stock research platform.
 
@@ -369,9 +325,8 @@ Natural next steps for the project:
 - add a pinned `requirements.txt` or `pyproject.toml`
 - add unit tests around signal math and factor scoring
 - persist historical scan results for time-series comparison
-- add benchmark-aware backtesting
 - add portfolio allocation logic on top of single-name signals
-- build a lightweight dashboard for ranked ideas and simulation summaries
+- build a lightweight dashboard for ranked ideas
 - add scheduler support for recurring scans
 - export richer CSV and JSON artifacts
 

@@ -32,8 +32,6 @@ fast_period=int(config['MACD']['fast_period'])
 slow_period=int(config['MACD']['slow_period'])
 signal_period=int(config['MACD']['signal_period'])
 
-DEFAULT_SIGNAL_LOOKBACK_START = int(config['OTHERS']['DEFAULT_SIGNAL_LOOKBACK_START'])
-DEFAULT_SIGNAL_LOOKBACK_END = int(config['OTHERS']['DEFAULT_SIGNAL_LOOKBACK_END'])
 DEFAULT_CACHE_DIR = config['OTHERS']['DEFAULT_CACHE_DIR']
 DEFAULT_INDEX_CACHE_MAX_AGE_HOURS = int(config['OTHERS']['DEFAULT_INDEX_CACHE_MAX_AGE_HOURS'])
 TECHNICAL_SIGNAL_WEIGHT = float(config['OTHERS']['TECHNICAL_SIGNAL_WEIGHT'])

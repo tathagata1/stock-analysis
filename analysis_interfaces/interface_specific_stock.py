@@ -2,7 +2,6 @@ import pandas as pd
 
 import dao.dao as dao
 import analysis_types.prediction  as prediction
-import analysis_types.simulation as simulation
 from config.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -29,8 +28,3 @@ def build_prediction_and_stats(ticker, include_sentiment=False, return_stats=Fal
     if return_stats:
         return df_pred, stats_row
     return df_pred
-
-
-def simulate_prediction_signal_strategy(df_pred, initial_funds):
-    logger.info("Running prediction signal simulation. initial_funds=%s", initial_funds)
-    return simulation.simulate_prediction_signal_strategy(df_pred, initial_funds)
