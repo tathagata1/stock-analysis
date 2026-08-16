@@ -131,6 +131,7 @@ The core analytics engine.
 - `fundamental_analysis.py`: valuation, quality, growth, and financial-strength scoring
 - `sentiment_analysis.py`: news ingestion and sentiment aggregation
 - `multifactor_analysis.py`: composite factor model with weighted ranking outputs
+- `index_search_reporting.py`: universe-scan enrichment, candidate selection, charts, and exports
 
 ### `analysis_types/`
 
