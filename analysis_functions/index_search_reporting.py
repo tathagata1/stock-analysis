@@ -29,6 +29,8 @@ CANDIDATE_COLUMNS = [
     "Indexes",
     "Signal_Text",
     "Signal",
+    "Analysis_Status",
+    "Signal_Coverage",
     "Close",
     "Period_Return_Pct",
     "Annualized_Volatility_Pct",
@@ -130,6 +132,8 @@ def _build_detail_row(index_name, ticker, analysis):
         "TICKER": ticker,
         "Signal": _numeric_value(latest.get("Signal")),
         "Signal_Text": latest.get("Signal_Text"),
+        "Analysis_Status": latest.get("analysis_status"),
+        "Signal_Coverage": _numeric_value(latest.get("signal_coverage")),
         "Close": current_price,
         "Period_Return_Pct": period_return_pct,
         "Annualized_Volatility_Pct": annualized_volatility_pct,
@@ -196,7 +200,7 @@ def build_detailed_candidate_data(results_by_index, candidate_limit=20):
     )
     detailed_ranked.insert(0, "Rank", np.arange(1, len(detailed_ranked) + 1))
     actionable = detailed_ranked[
-        detailed_ranked["Signal_Text"] != "HOLD"
+        detailed_ranked["Signal_Text"].str.contains("BUY|SELL", na=False)
     ].copy()
     buy_candidates = actionable[
         actionable["Signal_Text"].str.contains("BUY", na=False)

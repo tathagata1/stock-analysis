@@ -14,6 +14,7 @@ from .reporting import (
     prepare_trade_details,
 )
 from .workflow import load_backtest_market_data, load_multiple_backtest_market_data
+from .signal import run_composite_signal_backtest
 
 __all__ = [
     "build_dynamic_price_levels",
@@ -28,4 +29,5 @@ __all__ = [
     "prepare_trade_details",
     "resolve_benchmark",
     "run_price_intent_backtest",
+    "run_composite_signal_backtest",
 ]

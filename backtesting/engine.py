@@ -127,6 +127,8 @@ def _validate_backtest_inputs(
     slip_bps,
     priority,
     allow_short,
+    entry_bar_exit_policy,
+    level_update_mode,
 ):
     if history.empty:
         raise ValueError("Price history is empty")
@@ -190,6 +192,10 @@ def _validate_backtest_inputs(
         raise ValueError("commission_per_order and slippage_bps cannot be negative")
     if priority not in {"stop", "target"}:
         raise ValueError('same_day_exit_priority must be either "stop" or "target"')
+    if entry_bar_exit_policy not in {"defer", "stop", "target"}:
+        raise ValueError('entry_bar_exit_policy must be "defer", "stop", or "target"')
+    if level_update_mode not in {"dynamic", "entry"}:
+        raise ValueError('level_update_mode must be either "dynamic" or "entry"')
 
 
 def _buy_fill(open_price, limit_price, slip_bps):
@@ -226,7 +232,10 @@ def _market_fill(close_price, side, slip_bps):
 
 
 def _aligned_benchmark_equity(dates, benchmark, capital):
-    benchmark_close = benchmark.set_index("Date")["Close"].sort_index()
+    if benchmark is None or benchmark.empty:
+        return pd.Series(np.nan, index=pd.DatetimeIndex(dates))
+    price_column = "Adj Close" if benchmark["Adj Close"].notna().any() else "Close"
+    benchmark_close = benchmark.set_index("Date")[price_column].sort_index()
     aligned = benchmark_close.reindex(pd.DatetimeIndex(dates), method="ffill")
     if aligned.notna().any():
         first_value = aligned.dropna().iloc[0]
@@ -311,9 +320,13 @@ def run_price_intent_backtest(
     short_entry_limit=None,
     short_target=None,
     short_fixed_stop=None,
+    entry_bar_exit_policy="defer",
+    level_update_mode="dynamic",
+    allow_stop_widening=False,
 ):
     """Run a one-position long/short backtest and return result data frames."""
     prices = normalize_history(history)
+    benchmark_prices = normalize_history(benchmark)
     short_entry_limit = target if allow_short and short_entry_limit is None else short_entry_limit
     short_target = entry_limit if allow_short and short_target is None else short_target
     levels = pd.DataFrame(
@@ -349,6 +362,8 @@ def run_price_intent_backtest(
         slip_bps,
         priority,
         allow_short,
+        entry_bar_exit_policy,
+        level_update_mode,
     )
 
     cash = float(capital)
@@ -359,6 +374,7 @@ def run_price_intent_backtest(
     transactions = []
     round_trips = []
     equity_rows = []
+    entry_bar_ambiguities = 0
 
     for row_index, row in prices.iterrows():
         date = row["Date"]
@@ -373,7 +389,11 @@ def run_price_intent_backtest(
                 minimum_holding_days is None
                 or holding_sessions >= int(minimum_holding_days)
             )
-            trailing_value = current["trailing_pct"]
+            trailing_value = (
+                position["entry_trailing_pct"]
+                if level_update_mode == "entry"
+                else current["trailing_pct"]
+            )
             trailing_level = None
             target_level = None
             stop_candidates = []
@@ -383,20 +403,51 @@ def run_price_intent_backtest(
                     trailing_level = position["highest_completed_high"] * (
                         1 - trailing_value
                     )
-                if pd.notna(current["fixed_stop"]):
-                    stop_candidates.append(current["fixed_stop"])
+                current_fixed_stop = (
+                    position["entry_fixed_stop"]
+                    if level_update_mode == "entry"
+                    else current["fixed_stop"]
+                )
+                if (
+                    pd.isna(current_fixed_stop)
+                    and not allow_stop_widening
+                    and pd.notna(position["last_fixed_stop"])
+                ):
+                    current_fixed_stop = position["last_fixed_stop"]
+                if pd.notna(current_fixed_stop):
+                    if (
+                        level_update_mode == "dynamic"
+                        and not allow_stop_widening
+                        and pd.notna(position["last_fixed_stop"])
+                    ):
+                        current_fixed_stop = max(
+                            float(current_fixed_stop), float(position["last_fixed_stop"])
+                        )
+                    position["last_fixed_stop"] = current_fixed_stop
+                    stop_candidates.append(current_fixed_stop)
                 if trailing_level is not None:
                     stop_candidates.append(trailing_level)
                 active_stop = max(stop_candidates) if stop_candidates else np.nan
-                target_level = current["target"]
+                if (
+                    pd.notna(active_stop)
+                    and not allow_stop_widening
+                    and pd.notna(position["last_active_stop"])
+                ):
+                    active_stop = max(float(active_stop), float(position["last_active_stop"]))
+                if pd.notna(active_stop):
+                    position["last_active_stop"] = active_stop
+                target_level = (
+                    position["entry_target"]
+                    if level_update_mode == "entry"
+                    else current["target"]
+                )
                 target_hit = (
                     minimum_hold_met
                     and pd.notna(target_level)
                     and row["High"] >= target_level
                 )
                 stop_hit = (
-                    minimum_hold_met
-                    and pd.notna(active_stop)
+                    pd.notna(active_stop)
                     and row["Low"] <= active_stop
                 )
             else:
@@ -404,20 +455,51 @@ def run_price_intent_backtest(
                     trailing_level = position["lowest_completed_low"] * (
                         1 + trailing_value
                     )
-                if pd.notna(current["short_fixed_stop"]):
-                    stop_candidates.append(current["short_fixed_stop"])
+                current_fixed_stop = (
+                    position["entry_fixed_stop"]
+                    if level_update_mode == "entry"
+                    else current["short_fixed_stop"]
+                )
+                if (
+                    pd.isna(current_fixed_stop)
+                    and not allow_stop_widening
+                    and pd.notna(position["last_fixed_stop"])
+                ):
+                    current_fixed_stop = position["last_fixed_stop"]
+                if pd.notna(current_fixed_stop):
+                    if (
+                        level_update_mode == "dynamic"
+                        and not allow_stop_widening
+                        and pd.notna(position["last_fixed_stop"])
+                    ):
+                        current_fixed_stop = min(
+                            float(current_fixed_stop), float(position["last_fixed_stop"])
+                        )
+                    position["last_fixed_stop"] = current_fixed_stop
+                    stop_candidates.append(current_fixed_stop)
                 if trailing_level is not None:
                     stop_candidates.append(trailing_level)
                 active_stop = min(stop_candidates) if stop_candidates else np.nan
-                target_level = current["short_target"]
+                if (
+                    pd.notna(active_stop)
+                    and not allow_stop_widening
+                    and pd.notna(position["last_active_stop"])
+                ):
+                    active_stop = min(float(active_stop), float(position["last_active_stop"]))
+                if pd.notna(active_stop):
+                    position["last_active_stop"] = active_stop
+                target_level = (
+                    position["entry_target"]
+                    if level_update_mode == "entry"
+                    else current["short_target"]
+                )
                 target_hit = (
                     minimum_hold_met
                     and pd.notna(target_level)
                     and row["Low"] <= target_level
                 )
                 stop_hit = (
-                    minimum_hold_met
-                    and pd.notna(active_stop)
+                    pd.notna(active_stop)
                     and row["High"] >= active_stop
                 )
 
@@ -536,6 +618,25 @@ def run_price_intent_backtest(
                     "return_basis": entry_notional + float(fee),
                     "highest_completed_high": float(row["High"]),
                     "lowest_completed_low": float(row["Low"]),
+                    "entry_target": (
+                        current["target"] if entry_side == "LONG" else current["short_target"]
+                    ),
+                    "entry_fixed_stop": (
+                        current["fixed_stop"]
+                        if entry_side == "LONG"
+                        else current["short_fixed_stop"]
+                    ),
+                    "entry_trailing_pct": current["trailing_pct"],
+                    "last_fixed_stop": (
+                        current["fixed_stop"]
+                        if entry_side == "LONG"
+                        else current["short_fixed_stop"]
+                    ),
+                    "last_active_stop": (
+                        current["fixed_stop"]
+                        if entry_side == "LONG"
+                        else current["short_fixed_stop"]
+                    ),
                 }
                 transactions.append(
                     {
@@ -554,6 +655,59 @@ def run_price_intent_backtest(
                     }
                 )
                 action_today = f"ENTER {entry_side}"
+
+        # Daily bars cannot reveal whether an exit level was touched before or
+        # after an intraday entry. Record that ambiguity and apply the caller's
+        # explicit policy; the backwards-compatible default defers all exits.
+        if position is not None and position["entry_index"] == row_index:
+            if position["side"] == "LONG":
+                entry_target_level = position["entry_target"]
+                entry_stop_level = position["entry_fixed_stop"]
+                entry_target_hit = pd.notna(entry_target_level) and row["High"] >= entry_target_level
+                entry_stop_hit = pd.notna(entry_stop_level) and row["Low"] <= entry_stop_level
+            else:
+                entry_target_level = position["entry_target"]
+                entry_stop_level = position["entry_fixed_stop"]
+                entry_target_hit = pd.notna(entry_target_level) and row["Low"] <= entry_target_level
+                entry_stop_hit = pd.notna(entry_stop_level) and row["High"] >= entry_stop_level
+
+            if entry_target_hit or entry_stop_hit:
+                entry_bar_ambiguities += 1
+
+            chosen_entry_exit = None
+            if entry_bar_exit_policy == "stop":
+                chosen_entry_exit = "stop" if entry_stop_hit else "target" if entry_target_hit else None
+            elif entry_bar_exit_policy == "target":
+                chosen_entry_exit = "target" if entry_target_hit else "stop" if entry_stop_hit else None
+
+            if chosen_entry_exit is not None:
+                exit_side = position["side"]
+                if chosen_entry_exit == "stop":
+                    exit_reason = "STOP_LOSS"
+                    fill_function = _sell_stop_fill if exit_side == "LONG" else _buy_stop_fill
+                    raw_exit, fill_exit = fill_function(entry_stop_level, entry_stop_level, slip_bps)
+                else:
+                    exit_reason = "TARGET"
+                    fill_function = _sell_limit_fill if exit_side == "LONG" else _buy_fill
+                    raw_exit, fill_exit = fill_function(entry_target_level, entry_target_level, slip_bps)
+                cash, transaction, round_trip = _exit_records(
+                    position,
+                    shares,
+                    cash,
+                    date,
+                    raw_exit,
+                    fill_exit,
+                    exit_reason,
+                    0,
+                    fee,
+                    entries,
+                )
+                transactions.append(transaction)
+                round_trips.append(round_trip)
+                shares = 0.0
+                position = None
+                next_entry_index = row_index + int(wait_days) + 1
+                action_today = f"EXIT {exit_side}: {exit_reason} (ENTRY BAR)"
 
         # A last-session entry cannot be evaluated later, so close it at that close.
         if position is not None and liquidate_at_end and row_index == len(prices) - 1:
@@ -604,9 +758,14 @@ def run_price_intent_backtest(
             )
 
     equity = pd.DataFrame(equity_rows)
-    equity["buy_hold_equity"] = float(capital) * equity["Close"] / equity["Close"].iloc[0]
+    total_return_price = prices["Adj Close"].where(
+        prices["Adj Close"].notna(), prices["Close"]
+    )
+    equity["buy_hold_equity"] = (
+        float(capital) * total_return_price / total_return_price.iloc[0]
+    )
     equity["benchmark_equity"] = _aligned_benchmark_equity(
-        equity["Date"], benchmark, capital
+        equity["Date"], benchmark_prices, capital
     ).to_numpy()
     equity["drawdown_pct"] = (
         equity["strategy_equity"] / equity["strategy_equity"].cummax() - 1
@@ -618,8 +777,10 @@ def run_price_intent_backtest(
     ending_equity = equity["strategy_equity"].iloc[-1]
     total_return_pct = (ending_equity / float(capital) - 1) * 100
     annualized_return_pct = (
-        (ending_equity / float(capital)) ** (365.25 / elapsed_days) - 1
-    ) * 100
+        ((ending_equity / float(capital)) ** (365.25 / elapsed_days) - 1) * 100
+        if ending_equity > 0
+        else np.nan
+    )
     buy_hold_return_pct = (
         equity["buy_hold_equity"].iloc[-1] / float(capital) - 1
     ) * 100
@@ -630,6 +791,40 @@ def run_price_intent_backtest(
     )
     completed_trades = len(round_trips_frame)
     winning_trades = int((round_trips_frame["pnl"] > 0).sum()) if completed_trades else 0
+    equity_returns = equity["strategy_equity"].pct_change().replace([np.inf, -np.inf], np.nan).dropna()
+    annualized_volatility_pct = (
+        float(equity_returns.std() * np.sqrt(252) * 100)
+        if len(equity_returns) > 1
+        else np.nan
+    )
+    sharpe_ratio = (
+        float(np.sqrt(252) * equity_returns.mean() / equity_returns.std())
+        if len(equity_returns) > 1 and equity_returns.std() > 0
+        else np.nan
+    )
+    downside_returns = equity_returns[equity_returns < 0]
+    sortino_ratio = (
+        float(np.sqrt(252) * equity_returns.mean() / downside_returns.std())
+        if len(downside_returns) > 1 and downside_returns.std() > 0
+        else np.nan
+    )
+    gross_profit = (
+        float(round_trips_frame.loc[round_trips_frame["pnl"] > 0, "pnl"].sum())
+        if completed_trades
+        else 0.0
+    )
+    gross_loss = (
+        abs(float(round_trips_frame.loc[round_trips_frame["pnl"] < 0, "pnl"].sum()))
+        if completed_trades
+        else 0.0
+    )
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else np.nan
+    total_commissions = float(transactions_frame["commission"].sum()) if not transactions_frame.empty else 0.0
+    turnover = (
+        float(transactions_frame["gross_value"].sum() / equity["strategy_equity"].abs().mean())
+        if not transactions_frame.empty and equity["strategy_equity"].abs().mean() > 0
+        else 0.0
+    )
 
     summary = pd.DataFrame(
         [
@@ -646,6 +841,9 @@ def run_price_intent_backtest(
                 "excess_vs_benchmark_pct_points": total_return_pct
                 - benchmark_return_pct,
                 "max_drawdown_pct": equity["drawdown_pct"].min(),
+                "annualized_volatility_pct": annualized_volatility_pct,
+                "sharpe_ratio": sharpe_ratio,
+                "sortino_ratio": sortino_ratio,
                 "completed_trades": completed_trades,
                 "long_trades": (
                     int((round_trips_frame["side"] == "LONG").sum())
@@ -667,6 +865,18 @@ def run_price_intent_backtest(
                     round_trips_frame["pnl"].sum() if completed_trades else 0.0
                 ),
                 "exposure_pct": equity["shares"].ne(0).mean() * 100,
+                "average_trade_pnl": (
+                    round_trips_frame["pnl"].mean() if completed_trades else np.nan
+                ),
+                "average_holding_sessions": (
+                    round_trips_frame["holding_sessions"].mean()
+                    if completed_trades
+                    else np.nan
+                ),
+                "profit_factor": profit_factor,
+                "total_commissions": total_commissions,
+                "turnover_multiple": turnover,
+                "entry_bar_ambiguities": entry_bar_ambiguities,
             }
         ]
     )
@@ -678,4 +888,10 @@ def run_price_intent_backtest(
         "round_trips": round_trips_frame,
         "summary": summary,
         "allow_short": bool(allow_short),
+        "execution_assumptions": {
+            "entry_bar_exit_policy": entry_bar_exit_policy,
+            "level_update_mode": level_update_mode,
+            "allow_stop_widening": bool(allow_stop_widening),
+            "short_model": "simplified; excludes borrow fees, margin calls, and dividends owed",
+        },
     }

@@ -1,8 +1,9 @@
-beautifulsoup4
-lxml
-matplotlib
-numpy
-openai>=1.0.0
-pandas
-requests
-yfinance
+beautifulsoup4==4.15.0
+lxml==6.0.2
+matplotlib==3.11.1
+numpy==2.3.5; python_version == "3.11"
+numpy==2.5.1; python_version >= "3.12"
+openai==2.30.0
+pandas==3.0.5
+requests==2.33.1
+yfinance==1.5.1

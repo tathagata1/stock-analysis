@@ -433,7 +433,13 @@ def plot_backtest_results(
     ax_price.legend(loc="upper left", ncol=2)
 
     ax_benchmark = ax_price.twinx()
-    benchmark_plot = benchmark_history.set_index("Date")["Close"].sort_index()
+    benchmark_price_column = (
+        "Adj Close"
+        if "Adj Close" in benchmark_history
+        and benchmark_history["Adj Close"].notna().any()
+        else "Close"
+    )
+    benchmark_plot = benchmark_history.set_index("Date")[benchmark_price_column].sort_index()
     benchmark_plot = benchmark_plot.loc[
         (benchmark_plot.index >= prices["Date"].min())
         & (benchmark_plot.index <= prices["Date"].max())

@@ -1,8 +1,9 @@
 import config.config as config
 from config.logging_config import get_logger
+import numpy as np
+import pandas as pd
 
 logger = get_logger(__name__)
-import pandas as pd
 
 #Momentum Indicators
 def rsi(data, window=config.rsi_period): #Relative Strength Index
@@ -44,71 +45,105 @@ def bollinger_bands(df, window=config.bolinger_period):
     return middle_band, upper_band, lower_band
 
 def atr(data, period=config.atr_period): #Average True Range
-    data['HL'] = data['High'] - data['Low']
-    data['HC'] = abs(data['High'] - data['Close'].shift(1))
-    data['LC'] = abs(data['Low'] - data['Close'].shift(1))
-    data['TR'] = data[['HL', 'HC', 'LC']].max(axis=1)
-    data1 = data['TR'].rolling(window=period).mean()
-    return data1
+    prior_close = data['Close'].shift(1)
+    true_range = pd.concat(
+        [
+            data['High'] - data['Low'],
+            (data['High'] - prior_close).abs(),
+            (data['Low'] - prior_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    return true_range.rolling(window=period, min_periods=period).mean()
 
 #Volume Indicators
-def high_volume(df):
-    avg_volume = df['Volume'].mean()
-    high_volume = df['Volume'] > (1.5 * avg_volume)
-    return high_volume
+def high_volume(
+    df,
+    window=config.VOLUME_LOOKBACK_PERIOD,
+    multiplier=config.HIGH_VOLUME_MULTIPLIER,
+):
+    """Flag volume relative to the *prior* trailing average.
 
-def vwap(df): #Volume-Weighted Average Price
-    q = df['Volume']
-    p = df['Close']
-    vwap_value = (q * p).cumsum() / q.cumsum()
-    return vwap_value
+    Shifting the average by one session makes historical flags prefix-invariant:
+    adding future rows cannot change an earlier classification.
+    """
+    prior_average = (
+        pd.to_numeric(df['Volume'], errors='coerce')
+        .shift(1)
+        .rolling(window=window, min_periods=window)
+        .mean()
+    )
+    result = (df['Volume'] > multiplier * prior_average).astype('boolean')
+    return result.where(prior_average.notna(), pd.NA)
+
+def vwap(df, window=config.VWAP_LOOKBACK_PERIOD):
+    """Return a rolling daily-bar volume-weighted average price.
+
+    This is intentionally a rolling daily approximation, not intraday session
+    VWAP.  A fixed window avoids dependence on the requested history start date.
+    """
+    volume = pd.to_numeric(df['Volume'], errors='coerce')
+    close = pd.to_numeric(df['Close'], errors='coerce')
+    weighted = (volume * close).rolling(window, min_periods=window).sum()
+    volume_sum = volume.rolling(window, min_periods=window).sum()
+    return weighted / volume_sum.replace(0, np.nan)
+
+
+def _has_values(row, *columns):
+    return all(pd.notna(row.get(column)) for column in columns)
 
 # Technical Analysis functions
 def calculate_buy_score(row):
+    availability = row.get('technical_data_available', True)
+    if pd.notna(availability) and not bool(availability):
+        return np.nan
     score = 0
-    if row['RSI'] < config.rsi_buy:
+    if pd.notna(row.get('RSI')) and row['RSI'] < config.rsi_buy:
         score += 0.2
-    elif row['RSI'] < (config.rsi_buy + 10):
+    elif pd.notna(row.get('RSI')) and row['RSI'] < (config.rsi_buy + 10):
         score += 0.1
-    if row['SMA' + str(config.sma1)] > row['SMA' + str(config.sma2)]:
+    if _has_values(row, 'SMA' + str(config.sma1), 'SMA' + str(config.sma2)) and row['SMA' + str(config.sma1)] > row['SMA' + str(config.sma2)]:
         score += 0.2
-    if row['EMA' + str(config.ema1)] > row['EMA' + str(config.ema2)]:
+    if _has_values(row, 'EMA' + str(config.ema1), 'EMA' + str(config.ema2)) and row['EMA' + str(config.ema1)] > row['EMA' + str(config.ema2)]:
         score += 0.2
-    if row['Close'] < row['VWAP']:
+    if _has_values(row, 'Close', 'VWAP') and row['Close'] < row['VWAP']:
         score += 0.1
-    if row['%K'] < config.stoc_buy and row['%D'] < config.stoc_buy:
+    if _has_values(row, '%K', '%D') and row['%K'] < config.stoc_buy and row['%D'] < config.stoc_buy:
         score += 0.1
-    if row['Close'] < row['Lower_Band']:
+    if _has_values(row, 'Close', 'Lower_Band') and row['Close'] < row['Lower_Band']:
         score += 0.1
-    if row['MACD'] > row['Signal_Line']:
+    if _has_values(row, 'MACD', 'Signal_Line') and row['MACD'] > row['Signal_Line']:
         score += 0.15
-    if row['High_Volume']:
+    if pd.notna(row.get('High_Volume')) and bool(row['High_Volume']):
         score += 0.05
-    if row['ATR'] > config.atr:
+    if pd.notna(row.get('ATR_Pct')) and row['ATR_Pct'] > config.ATR_PERCENT_THRESHOLD:
         score += 0.05
     return score
 
 def calculate_sell_score(row):
+    availability = row.get('technical_data_available', True)
+    if pd.notna(availability) and not bool(availability):
+        return np.nan
     score = 0
-    if row['RSI'] > config.rsi_sell:
+    if pd.notna(row.get('RSI')) and row['RSI'] > config.rsi_sell:
         score -= 0.2
-    elif row['RSI'] > (config.rsi_sell - 10):
+    elif pd.notna(row.get('RSI')) and row['RSI'] > (config.rsi_sell - 10):
         score -= 0.1
-    if row['SMA' + str(config.sma1)] < row['SMA' + str(config.sma2)]:
+    if _has_values(row, 'SMA' + str(config.sma1), 'SMA' + str(config.sma2)) and row['SMA' + str(config.sma1)] < row['SMA' + str(config.sma2)]:
         score -= 0.2
-    if row['EMA' + str(config.ema1)] < row['EMA' + str(config.ema2)]:
+    if _has_values(row, 'EMA' + str(config.ema1), 'EMA' + str(config.ema2)) and row['EMA' + str(config.ema1)] < row['EMA' + str(config.ema2)]:
         score -= 0.2
-    if row['Close'] > row['VWAP']:
+    if _has_values(row, 'Close', 'VWAP') and row['Close'] > row['VWAP']:
         score -= 0.1
-    if row['%K'] > config.stoc_sell and row['%D'] > config.stoc_sell:
+    if _has_values(row, '%K', '%D') and row['%K'] > config.stoc_sell and row['%D'] > config.stoc_sell:
         score -= 0.1
-    if row['Close'] > row['Upper_Band']:
+    if _has_values(row, 'Close', 'Upper_Band') and row['Close'] > row['Upper_Band']:
         score -= 0.1
-    if row['MACD'] < row['Signal_Line']:
+    if _has_values(row, 'MACD', 'Signal_Line') and row['MACD'] < row['Signal_Line']:
         score -= 0.15
-    if not row['High_Volume']:
+    if pd.notna(row.get('High_Volume')) and not bool(row['High_Volume']):
         score -= 0.05
-    if not row['ATR'] > config.atr:
+    if pd.notna(row.get('ATR_Pct')) and row['ATR_Pct'] <= config.ATR_PERCENT_THRESHOLD:
         score -= 0.05
     return score
 
@@ -116,6 +151,9 @@ def calculate_sell_score(row):
 def get_technical_analysis_calculations(df):
     ticker = df['TICKER'].iloc[0] if not df.empty and 'TICKER' in df.columns else "UNKNOWN"
     logger.info("Calculating technical indicators. ticker=%s rows=%s", ticker, len(df))
+    if df.empty:
+        return df.copy()
+
     # Ensure numeric conversion with error handling
     cols = ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
     df[cols] = df[cols].apply(pd.to_numeric, errors='coerce')
@@ -131,7 +169,23 @@ def get_technical_analysis_calculations(df):
     df['MACD'], df['Signal_Line'] = macd(df)
     df['%K'], df['%D'] = stochastic_oscillator(df)
     df['ATR'] = atr(df)
+    df['ATR_Pct'] = df['ATR'] / df['Close'].replace(0, np.nan) * 100
     df['VWAP'] = vwap(df)
+    warmup_complete = pd.Series(
+        np.arange(len(df)) >= config.TECHNICAL_MIN_HISTORY - 1,
+        index=df.index,
+    )
+    required = [
+        'RSI',
+        'SMA' + str(config.sma2),
+        'EMA' + str(config.ema2),
+        'Middle_Band',
+        '%D',
+        'ATR_Pct',
+        'VWAP',
+        'High_Volume',
+    ]
+    df['technical_data_available'] = warmup_complete & df[required].notna().all(axis=1)
     
     # Calculate other stuff
     df['Daily_Return'] = df['Close'].pct_change()

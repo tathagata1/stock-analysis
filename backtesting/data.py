@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import re
 import warnings
+import uuid
 
 import numpy as np
 import pandas as pd
@@ -26,6 +27,20 @@ PRICE_COLUMNS = ["Date", "Open", "High", "Low", "Close", "Adj Close", "Volume"]
 def clean_symbol_for_filename(symbol):
     """Return a filesystem-safe representation of a market symbol."""
     return re.sub(r"[^A-Za-z0-9._-]+", "_", symbol).strip("_") or "symbol"
+
+
+def _atomic_write_text(path, content):
+    path = Path(path)
+    temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    temporary_path.write_text(content, encoding="utf-8")
+    temporary_path.replace(path)
+
+
+def _atomic_write_csv(frame, path):
+    path = Path(path)
+    temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    frame.to_csv(temporary_path, index=False)
+    temporary_path.replace(path)
 
 
 def normalize_history(history):
@@ -68,6 +83,8 @@ def load_price_history_cached(
     force_refresh=False,
 ):
     """Load daily prices from a fresh cache or Yahoo Finance."""
+    if float(max_age_hours) < 0:
+        raise ValueError("max_age_hours cannot be negative")
     start_ts = pd.Timestamp(start).normalize()
     end_ts = pd.Timestamp(end).normalize() if end is not None else pd.Timestamp.today().normalize()
     if end_ts < start_ts:
@@ -75,7 +92,8 @@ def load_price_history_cached(
 
     price_cache_dir = Path(cache_root) / "price_history"
     price_cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_stem = f"{clean_symbol_for_filename(symbol)}_{start_ts:%Y%m%d}_{end_ts:%Y%m%d}_1d"
+    end_label = "latest" if end is None else f"{end_ts:%Y%m%d}"
+    cache_stem = f"{clean_symbol_for_filename(symbol)}_{start_ts:%Y%m%d}_{end_label}_1d"
     cache_file = price_cache_dir / f"{cache_stem}.csv"
     metadata_file = price_cache_dir / f"{cache_stem}.json"
 
@@ -89,9 +107,17 @@ def load_price_history_cached(
     cache_used = cache_is_fresh and not force_refresh
     stale_fallback = False
 
+    history = None
     if cache_used:
-        history = normalize_history(pd.read_csv(cache_file, parse_dates=["Date"]))
-    else:
+        try:
+            history = normalize_history(pd.read_csv(cache_file, parse_dates=["Date"]))
+            if history.empty:
+                raise ValueError("Cached price history is empty")
+        except Exception as exc:
+            warnings.warn(f"Ignoring unreadable cache for {symbol}. Error: {exc}")
+            cache_used = False
+
+    if not cache_used:
         try:
             # yfinance treats end as exclusive, so add one day to make the input inclusive.
             history = yf.Ticker(symbol).history(
@@ -104,10 +130,12 @@ def load_price_history_cached(
             history = normalize_history(history)
             if history.empty:
                 raise ValueError(f"Yahoo Finance returned no daily data for {symbol}")
-            history.to_csv(cache_file, index=False)
-            metadata_file.write_text(
+            _atomic_write_csv(history, cache_file)
+            _atomic_write_text(
+                metadata_file,
                 json.dumps(
                     {
+                        "schema_version": 1,
                         "symbol": symbol,
                         "start_date": start_ts.strftime("%Y-%m-%d"),
                         "end_date": end_ts.strftime("%Y-%m-%d"),
@@ -116,7 +144,6 @@ def load_price_history_cached(
                     },
                     indent=2,
                 ),
-                encoding="utf-8",
             )
             cache_age_hours = 0.0
         except Exception as exc:
@@ -124,6 +151,8 @@ def load_price_history_cached(
                 raise
             warnings.warn(f"Refresh failed for {symbol}; using stale cache. Error: {exc}")
             history = normalize_history(pd.read_csv(cache_file, parse_dates=["Date"]))
+            if history.empty:
+                raise RuntimeError(f"Stale price cache for {symbol} is empty") from exc
             cache_used = True
             stale_fallback = True
 

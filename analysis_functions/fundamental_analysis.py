@@ -5,7 +5,9 @@ MISSING_VALUE = "--"
 
 
 def _normalize_numeric_or_missing(value):
-    if value in (None, "", MISSING_VALUE):
+    if value is None or (
+        isinstance(value, str) and value.strip() in {"", MISSING_VALUE}
+    ):
         return MISSING_VALUE
     try:
         return MISSING_VALUE if float(value) != float(value) else float(value)
@@ -40,11 +42,9 @@ def _clamp_score(score, lower=-1.0, upper=1.0):
 
 
 def get_ev_ebitda_modifier(ev_ebitda_ratio):
-    
-    
-    if (ev_ebitda_ratio == "--"):
+    ev_ebitda_ratio = _normalize_numeric_or_missing(ev_ebitda_ratio)
+    if ev_ebitda_ratio == MISSING_VALUE or ev_ebitda_ratio <= 0:
         return 0
-    ev_ebitda_ratio = float(ev_ebitda_ratio)
     
     """
     Adjusts a score based on the Enterprise Value to EBITDA ratio.
@@ -63,10 +63,9 @@ def get_ev_ebitda_modifier(ev_ebitda_ratio):
         return -0.075  # Larger decrease for elevated risk
 
 def get_peg_modifier(peg_ratio):
-    
-    if (peg_ratio == "--" or peg_ratio == "-- "):
+    peg_ratio = _normalize_numeric_or_missing(peg_ratio)
+    if peg_ratio == MISSING_VALUE or peg_ratio <= 0:
         return 0
-    peg_ratio = float(peg_ratio)
     """
     Adjusts a score based on the PEG ratio (5-year expected).
     
@@ -84,10 +83,9 @@ def get_peg_modifier(peg_ratio):
         return -0.1  # Larger decrease for elevated risk
 
 def get_ev_revenue_modifier(ev_revenue_ratio):
-    
-    if (ev_revenue_ratio == "--"):
+    ev_revenue_ratio = _normalize_numeric_or_missing(ev_revenue_ratio)
+    if ev_revenue_ratio == MISSING_VALUE or ev_revenue_ratio <= 0:
         return 0
-    ev_revenue_ratio = float(ev_revenue_ratio)
     """
     Adjusts a score based on the Enterprise Value-to-Revenue (EV/Revenue) ratio.
     
@@ -105,10 +103,9 @@ def get_ev_revenue_modifier(ev_revenue_ratio):
         return -0.025  # Larger decrease for elevated risk
 
 def get_price_book_modifier(price_book_ratio):
-    
-    if (price_book_ratio == "--"):
+    price_book_ratio = _normalize_numeric_or_missing(price_book_ratio)
+    if price_book_ratio == MISSING_VALUE or price_book_ratio <= 0:
         return 0
-    price_book_ratio = float(price_book_ratio)
     """
     Adjusts a score based on the Price-to-Book (P/B) ratio of a company.
     
@@ -126,10 +123,9 @@ def get_price_book_modifier(price_book_ratio):
         return -0.025  # Larger decrease for elevated risk
 
 def get_price_sales_modifier(price_sales_ratio):
-    
-    if (price_sales_ratio == "--"):
+    price_sales_ratio = _normalize_numeric_or_missing(price_sales_ratio)
+    if price_sales_ratio == MISSING_VALUE or price_sales_ratio <= 0:
         return 0
-    price_sales_ratio = float(price_sales_ratio)
     """
     Adjusts a score based on the Price-to-Sales (P/S) ratio of a company.
     
@@ -147,10 +143,9 @@ def get_price_sales_modifier(price_sales_ratio):
         return -0.075  # Significant decrease for elevated risk
 
 def get_fpe_ratio_modifier(fpe_ratio):
-    
-    if (fpe_ratio == "--"):
+    fpe_ratio = _normalize_numeric_or_missing(fpe_ratio)
+    if fpe_ratio == MISSING_VALUE or fpe_ratio <= 0:
         return 0
-    fpe_ratio = float(fpe_ratio)
     """
     Adjusts a score based on the forward P/E ratio of a company.
 
@@ -169,10 +164,9 @@ def get_fpe_ratio_modifier(fpe_ratio):
         return -0.1  # Larger decrease for higher risk
 
 def get_tpe_ratio_modifier(tpe_ratio):
-    
-    if (tpe_ratio == "--"):
+    tpe_ratio = _normalize_numeric_or_missing(tpe_ratio)
+    if tpe_ratio == MISSING_VALUE or tpe_ratio <= 0:
         return 0
-    tpe_ratio = float(tpe_ratio)
     """
     Adjusts a score based on the trailing P/E ratio of a company.
 
@@ -191,10 +185,9 @@ def get_tpe_ratio_modifier(tpe_ratio):
         return -0.1  # Larger decrease for high risk
 
 def get_market_cap_modifier(market_cap):
-    
-    if (market_cap == "--"):
+    market_cap = _normalize_numeric_or_missing(market_cap)
+    if market_cap == MISSING_VALUE or market_cap <= 0:
         return 0
-    market_cap = float(market_cap)
     """
     Adjusts a score based on the market capitalization of a company.
     
@@ -213,10 +206,9 @@ def get_market_cap_modifier(market_cap):
         return -0.25  # Larger decrease for very small caps (highest risk)
 
 def get_enterprise_value_modifier(enterprise_value):
-    
-    if (enterprise_value == "--"):
+    enterprise_value = _normalize_numeric_or_missing(enterprise_value)
+    if enterprise_value == MISSING_VALUE or enterprise_value <= 0:
         return 0
-    enterprise_value = float(enterprise_value)
     """
     Adjusts a score based on the enterprise value of a company.
 
@@ -312,7 +304,7 @@ def get_free_cash_flow_margin_modifier(free_cash_flow_margin):
 
 def get_debt_to_ebitda_modifier(debt_to_ebitda):
     debt_to_ebitda = _normalize_numeric_or_missing(debt_to_ebitda)
-    if debt_to_ebitda == MISSING_VALUE:
+    if debt_to_ebitda == MISSING_VALUE or debt_to_ebitda < 0:
         return 0
     if debt_to_ebitda < 1:
         return 0.075
@@ -432,7 +424,7 @@ def get_quick_ratio_modifier(quick_ratio):
 
 def get_debt_to_equity_modifier(debt_to_equity):
     debt_to_equity = _normalize_numeric_or_missing(debt_to_equity)
-    if debt_to_equity == MISSING_VALUE:
+    if debt_to_equity == MISSING_VALUE or debt_to_equity < 0:
         return 0
     if debt_to_equity < 0.5:
         return 0.05
@@ -540,15 +532,15 @@ def get_fundamental_analysis(df_stats):
     ticker = df_stats.get('TICKER', 'UNKNOWN') if hasattr(df_stats, 'get') else 'UNKNOWN'
     logger.info("Calculating fundamental analysis score. ticker=%s", ticker)
     modifiers = [
-        get_market_cap_modifier(df_stats['Market Cap']),
-        get_enterprise_value_modifier(df_stats['Enterprise Value']),
-        get_tpe_ratio_modifier(df_stats['Trailing P/E']),
-        get_fpe_ratio_modifier(df_stats['Forward P/E']),
-        get_peg_modifier(df_stats['PEG Ratio (5yr expected)']),
-        get_price_sales_modifier(df_stats['Price/Sales']),
-        get_ev_ebitda_modifier(df_stats['Enterprise Value/EBITDA']),
-        get_ev_revenue_modifier(df_stats['Enterprise Value/Revenue']),
-        get_price_book_modifier(df_stats['Price/Book']),
+        get_market_cap_modifier(df_stats.get('Market Cap', MISSING_VALUE)),
+        get_enterprise_value_modifier(df_stats.get('Enterprise Value', MISSING_VALUE)),
+        get_tpe_ratio_modifier(df_stats.get('Trailing P/E', MISSING_VALUE)),
+        get_fpe_ratio_modifier(df_stats.get('Forward P/E', MISSING_VALUE)),
+        get_peg_modifier(df_stats.get('PEG Ratio (5yr expected)', MISSING_VALUE)),
+        get_price_sales_modifier(df_stats.get('Price/Sales', MISSING_VALUE)),
+        get_ev_ebitda_modifier(df_stats.get('Enterprise Value/EBITDA', MISSING_VALUE)),
+        get_ev_revenue_modifier(df_stats.get('Enterprise Value/Revenue', MISSING_VALUE)),
+        get_price_book_modifier(df_stats.get('Price/Book', MISSING_VALUE)),
     ]
     score = sum(modifiers)
     logger.info("Calculated fundamental analysis score successfully. ticker=%s score=%s", ticker, score)

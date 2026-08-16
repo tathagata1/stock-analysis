@@ -19,22 +19,34 @@ def build_prediction_summary_row(stock_analysis, run_date=None):
         "TICKER": stock_analysis["ticker"],
         "Signal": stock_analysis["recent_signal"]["signal_number"],
         "Signal_Text": stock_analysis["recent_signal"]["signal_text"],
+        "Analysis_Status": stock_analysis["recent_signal"]["analysis_status"],
+        "Signal_Coverage": stock_analysis["recent_signal"]["signal_coverage"],
     }
 
 
-def build_stock_analysis(ticker, include_sentiment=False, period="max"):
+def build_stock_analysis(
+    ticker,
+    include_sentiment=False,
+    period="1y",
+    historical_analysis=False,
+):
     logger.info("Building stock analysis. ticker=%s include_sentiment=%s period=%s", ticker, include_sentiment, period)
     df_pred, stats_row = build_prediction_and_stats(
         ticker,
         include_sentiment=include_sentiment,
         return_stats=True,
         period=period,
+        historical_analysis=historical_analysis,
     )
-    
+
+    if df_pred.empty:
+        raise ValueError(f"Prediction pipeline returned no rows for {ticker}")
     latest_row = df_pred.iloc[0]
     recent_signal = {
         "signal_text": latest_row["Signal_Text"],
         "signal_number": latest_row["Signal"],
+        "analysis_status": latest_row.get("analysis_status", "UNKNOWN"),
+        "signal_coverage": latest_row.get("signal_coverage"),
     }
 
     return {
@@ -51,7 +63,9 @@ def run_index_search_workflow(
     use_ticker_cache=True,
     ticker_cache_dir=config.DEFAULT_CACHE_DIR,
     ticker_cache_max_age_hours=config.DEFAULT_INDEX_CACHE_MAX_AGE_HOURS,
-    period="max",
+    period="1y",
+    historical_analysis=False,
+    analysis_cache=None,
 ):
     logger.info(
         "Running index search workflow. index_name=%s limit=%s include_sentiment=%s use_ticker_cache=%s",
@@ -73,16 +87,35 @@ def run_index_search_workflow(
         
     analyses = {}
     prediction_rows = []
+    failure_rows = []
+    analysis_cache = analysis_cache if analysis_cache is not None else {}
     
     for ticker in tickers:
         logger.info("Processing index constituent. index_name=%s ticker=%s", index_name, ticker)
-        analysis = build_stock_analysis(
-            ticker,
-            include_sentiment=include_sentiment,
-            period=period,
-        )
-        analyses[ticker] = analysis
-        prediction_rows.append(build_prediction_summary_row(analysis))
+        try:
+            analysis = analysis_cache.get(ticker)
+            if analysis is None:
+                analysis = build_stock_analysis(
+                    ticker,
+                    include_sentiment=include_sentiment,
+                    period=period,
+                    historical_analysis=historical_analysis,
+                )
+                analysis_cache[ticker] = analysis
+            analyses[ticker] = analysis
+            prediction_rows.append(build_prediction_summary_row(analysis))
+        except Exception as exc:
+            logger.exception(
+                "Index constituent analysis failed. index_name=%s ticker=%s",
+                index_name,
+                ticker,
+            )
+            failure_rows.append({
+                "index_name": index_name,
+                "TICKER": ticker,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            })
 
     result = {
         "index_name": index_name,
@@ -90,6 +123,7 @@ def run_index_search_workflow(
         "analyses": analyses,
         "prediction_summary": pd.DataFrame(prediction_rows),
         "ticker_cache": ticker_cache,
+        "failures": pd.DataFrame(failure_rows),
     }
     if not result["prediction_summary"].empty:
         result["prediction_summary"] = result["prediction_summary"].sort_values(
@@ -112,7 +146,8 @@ def run_multi_index_search_workflow(
     use_ticker_cache=True,
     ticker_cache_dir=config.DEFAULT_CACHE_DIR,
     ticker_cache_max_age_hours=config.DEFAULT_INDEX_CACHE_MAX_AGE_HOURS,
-    period="max",
+    period="1y",
+    historical_analysis=False,
 ):
     logger.info(
         "Running multi-index search workflow. index_count=%s include_sentiment=%s use_ticker_cache=%s period=%s",
@@ -124,6 +159,8 @@ def run_multi_index_search_workflow(
     results_by_index = {}
     prediction_frames = []
     ticker_cache_rows = []
+    failure_frames = []
+    analysis_cache = {}
 
     for index_name in index_names:
         result = run_index_search_workflow(
@@ -134,6 +171,8 @@ def run_multi_index_search_workflow(
             ticker_cache_dir=ticker_cache_dir,
             ticker_cache_max_age_hours=ticker_cache_max_age_hours,
             period=period,
+            historical_analysis=historical_analysis,
+            analysis_cache=analysis_cache,
         )
 
         results_by_index[index_name] = result
@@ -150,7 +189,11 @@ def run_multi_index_search_workflow(
             "cache_used": ticker_cache.get("cache_used"),
             "cache_file": ticker_cache.get("cache_file"),
             "cache_age_hours": ticker_cache.get("cache_age_hours"),
+            "stale_fallback": ticker_cache.get("stale_fallback"),
+            "refresh_failed": ticker_cache.get("refresh_failed"),
         })
+        if not result["failures"].empty:
+            failure_frames.append(result["failures"])
 
     combined_prediction_summary = (
         pd.concat(prediction_frames, ignore_index=True)
@@ -167,7 +210,7 @@ def run_multi_index_search_workflow(
     signal_only = ranked_prediction_summary
     if not ranked_prediction_summary.empty:
         signal_only = ranked_prediction_summary[
-            ranked_prediction_summary["Signal_Text"] != "HOLD"
+            ranked_prediction_summary["Signal_Text"].str.contains("BUY|SELL", na=False)
         ].reset_index(drop=True)
 
     result = {
@@ -176,6 +219,12 @@ def run_multi_index_search_workflow(
         "ranked_prediction_summary": ranked_prediction_summary,
         "signal_only": signal_only,
         "ticker_cache_summary": pd.DataFrame(ticker_cache_rows),
+        "failures": (
+            pd.concat(failure_frames, ignore_index=True)
+            if failure_frames
+            else pd.DataFrame(columns=["index_name", "TICKER", "error_type", "error"])
+        ),
+        "unique_tickers_analyzed": len(analysis_cache),
     }
     logger.info(
         "Completed multi-index search workflow. index_count=%s combined_rows=%s signal_rows=%s",

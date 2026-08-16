@@ -22,12 +22,19 @@ VALUE_STAT_KEYS = [
     "Price/Book",
     "Enterprise Value/Revenue",
     "Enterprise Value/EBITDA",
+    "Target Mean Price",
     "TICKER",
+]
+
+FUNDAMENTAL_SCORE_KEYS = [
+    key for key in VALUE_STAT_KEYS if key not in {"TICKER", "Target Mean Price"}
 ]
 
 
 def _normalize_numeric_or_missing(value):
-    if value in (None, "", MISSING_VALUE):
+    if value is None or (
+        isinstance(value, str) and value.strip() in {"", MISSING_VALUE}
+    ):
         return MISSING_VALUE
     try:
         if pd.isna(value):
@@ -76,6 +83,16 @@ def _empty_value_stats(ticker):
     stats = {key: MISSING_VALUE for key in VALUE_STAT_KEYS}
     stats["TICKER"] = ticker
     return stats
+
+
+def _metric_coverage(metrics, keys):
+    if metrics is None:
+        return 0.0
+    available = sum(
+        _normalize_numeric_or_missing(metrics.get(key, MISSING_VALUE)) != MISSING_VALUE
+        for key in keys
+    )
+    return available / len(keys) if keys else 0.0
 
 
 def _prepare_snapshot_frame(snapshot_frame):
@@ -192,9 +209,18 @@ def _build_point_in_time_raw_advanced_data(snapshot_row, price_window):
     return raw_data
 
 
-def get_prediction(df, stats=None, include_sentiment=True):
+def get_prediction(df, stats=None, include_sentiment=True, historical_analysis=True):
     ticker = df["TICKER"].iloc[0] if not df.empty and "TICKER" in df.columns else "UNKNOWN"
     logger.info("Building prediction frame. ticker=%s include_sentiment=%s rows=%s", ticker, include_sentiment, len(df))
+
+    if df is None or df.empty:
+        raise ValueError(f"No price history is available for {ticker}")
+    required_columns = {"Date", "Open", "High", "Low", "Close", "Adj Close", "Volume", "TICKER"}
+    missing_columns = required_columns.difference(df.columns)
+    if missing_columns:
+        raise ValueError(
+            "Price history is missing required columns: " + ", ".join(sorted(missing_columns))
+        )
 
     df = df.copy()
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
@@ -207,7 +233,7 @@ def get_prediction(df, stats=None, include_sentiment=True):
     df["technical_analysis_sell_score"] = df.apply(technical_analysis.calculate_sell_score, axis=1)
 
     snapshot_frame = _prepare_snapshot_frame(dao.get_point_in_time_financial_snapshots(ticker))
-    latest_sentiment_score = sentiment_analysis.apply_sentiment_analysis(ticker) if include_sentiment else 0.0
+    latest_sentiment_score = sentiment_analysis.apply_sentiment_analysis(ticker) if include_sentiment else None
 
     fallback_stats = stats.to_dict() if hasattr(stats, "to_dict") else _empty_value_stats(ticker)
     fallback_raw_advanced = None
@@ -218,33 +244,40 @@ def get_prediction(df, stats=None, include_sentiment=True):
             logger.exception("Failed to load fallback advanced metrics. ticker=%s", ticker)
             fallback_raw_advanced = {"TICKER": ticker}
 
-    fundamental_scores = []
-    sentiment_scores = []
-    multifactor_scores = []
-    snapshot_report_dates = []
-    snapshot_available_from_dates = []
+    row_count = len(df)
+    fundamental_scores = [np.nan] * row_count
+    fundamental_coverage = [0.0] * row_count
+    sentiment_scores = [np.nan] * row_count
+    multifactor_scores = [np.nan] * row_count
+    multifactor_coverage = [0.0] * row_count
+    snapshot_report_dates = [pd.NaT] * row_count
+    snapshot_available_from_dates = [pd.NaT] * row_count
+    snapshot_frequencies = [None] * row_count
+    analysis_indexes = range(row_count) if historical_analysis else [row_count - 1]
 
-    for index, row in df.iterrows():
+    for index in analysis_indexes:
+        row = df.iloc[index]
         trade_date = _normalize_trade_date(row["Date"])
         snapshot_row = _snapshot_for_date(snapshot_frame, trade_date)
         price_window = df.iloc[:index + 1].copy()
-        row_sentiment_score = float(latest_sentiment_score) if include_sentiment and index == len(df) - 1 else 0.0
+        row_sentiment_score = (
+            float(latest_sentiment_score)
+            if include_sentiment and index == row_count - 1
+            else None
+        )
 
         if snapshot_row is not None:
             value_stats = _build_point_in_time_value_stats(snapshot_row, row)
             raw_advanced_data = _build_point_in_time_raw_advanced_data(snapshot_row, price_window)
-            snapshot_report_dates.append(snapshot_row["report_date"])
-            snapshot_available_from_dates.append(snapshot_row["available_from"])
-        elif fallback_raw_advanced is not None and index == len(df) - 1:
+            snapshot_report_dates[index] = snapshot_row["report_date"]
+            snapshot_available_from_dates[index] = snapshot_row["available_from"]
+            snapshot_frequencies[index] = snapshot_row.get("statement_frequency")
+        elif fallback_raw_advanced is not None and index == row_count - 1:
             value_stats = fallback_stats
             raw_advanced_data = fallback_raw_advanced
-            snapshot_report_dates.append(pd.NaT)
-            snapshot_available_from_dates.append(pd.NaT)
         else:
             value_stats = _empty_value_stats(ticker)
             raw_advanced_data = {"TICKER": ticker}
-            snapshot_report_dates.append(pd.NaT)
-            snapshot_available_from_dates.append(pd.NaT)
 
         advanced_stats = multifactor_analysis.derive_advanced_financial_metrics(raw_advanced_data).iloc[0]
         multifactor_result = multifactor_analysis.calculate_multifactor_model(
@@ -254,15 +287,23 @@ def get_prediction(df, stats=None, include_sentiment=True):
             sentiment_score=row_sentiment_score,
         )
 
-        fundamental_scores.append(fundamental_analysis.get_fundamental_analysis(value_stats))
-        sentiment_scores.append(row_sentiment_score)
-        multifactor_scores.append(multifactor_result["final_score"])
+        current_fundamental_coverage = _metric_coverage(value_stats, FUNDAMENTAL_SCORE_KEYS)
+        if current_fundamental_coverage > 0:
+            fundamental_scores[index] = fundamental_analysis.get_fundamental_analysis(value_stats)
+        fundamental_coverage[index] = current_fundamental_coverage
+        if row_sentiment_score is not None:
+            sentiment_scores[index] = row_sentiment_score
+        multifactor_scores[index] = multifactor_result["final_score"]
+        multifactor_coverage[index] = multifactor_result["factor_coverage"]
 
     df["fundamental_snapshot_report_date"] = snapshot_report_dates
     df["fundamental_snapshot_available_from"] = snapshot_available_from_dates
+    df["fundamental_snapshot_frequency"] = snapshot_frequencies
     df["fundamental_analysis_score"] = fundamental_scores
+    df["fundamental_analysis_coverage"] = fundamental_coverage
     df["sentiment_analysis_score"] = sentiment_scores
     df["multifactor_analysis_score"] = multifactor_scores
+    df["multifactor_analysis_coverage"] = multifactor_coverage
     df = df.sort_values("Date", ascending=False).reset_index(drop=True)
     logger.info("Built prediction frame successfully. ticker=%s", ticker)
     return df
@@ -274,7 +315,7 @@ def add_total_signal(df):
     technical_signal = df["technical_analysis_buy_score"] + df["technical_analysis_sell_score"]
     sentiment_signal = df["sentiment_analysis_score"]
     fundamental_signal = df["fundamental_analysis_score"]
-    multifactor_signal = df["multifactor_analysis_score"] if "multifactor_analysis_score" in df.columns else 0.0
+    multifactor_signal = df["multifactor_analysis_score"]
 
     total_weight = (
         config.TECHNICAL_SIGNAL_WEIGHT
@@ -283,12 +324,66 @@ def add_total_signal(df):
         + config.MULTIFACTOR_SIGNAL_WEIGHT
     )
 
-    df["Signal"] = (
-        (technical_signal * config.TECHNICAL_SIGNAL_WEIGHT)
-        + (sentiment_signal * config.SENTIMENT_SIGNAL_WEIGHT)
-        + (fundamental_signal * config.FUNDAMENTAL_SIGNAL_WEIGHT)
-        + (multifactor_signal * config.MULTIFACTOR_SIGNAL_WEIGHT)
-    ) / total_weight
+    technical_coverage = (
+        pd.to_numeric(df["technical_data_available"], errors="coerce").fillna(0).astype(float)
+        if "technical_data_available" in df.columns
+        else technical_signal.notna().astype(float)
+    )
+    fundamental_component_coverage = (
+        pd.to_numeric(df["fundamental_analysis_coverage"], errors="coerce").fillna(0).clip(0, 1)
+        if "fundamental_analysis_coverage" in df.columns
+        else fundamental_signal.notna().astype(float)
+    )
+    multifactor_component_coverage = (
+        pd.to_numeric(df["multifactor_analysis_coverage"], errors="coerce").fillna(0).clip(0, 1)
+        if "multifactor_analysis_coverage" in df.columns
+        else multifactor_signal.notna().astype(float)
+    )
+    components = [
+        (
+            technical_signal,
+            technical_coverage,
+            config.TECHNICAL_SIGNAL_WEIGHT,
+        ),
+        (
+            sentiment_signal,
+            sentiment_signal.notna().astype(float),
+            config.SENTIMENT_SIGNAL_WEIGHT,
+        ),
+        (
+            fundamental_signal,
+            fundamental_component_coverage,
+            config.FUNDAMENTAL_SIGNAL_WEIGHT,
+        ),
+        (
+            multifactor_signal,
+            multifactor_component_coverage,
+            config.MULTIFACTOR_SIGNAL_WEIGHT,
+        ),
+    ]
+    numerator = pd.Series(0.0, index=df.index)
+    available_weight = pd.Series(0.0, index=df.index)
+    for signal, coverage, configured_weight in components:
+        if configured_weight <= 0:
+            continue
+        valid = signal.notna() & coverage.gt(0)
+        effective_weight = configured_weight * coverage.where(valid, 0.0)
+        numerator = numerator + signal.fillna(0.0) * effective_weight
+        available_weight = available_weight + effective_weight
+
+    df["signal_coverage"] = available_weight / total_weight
+    df["Signal"] = (numerator / available_weight.replace(0, np.nan)).where(
+        df["signal_coverage"] >= config.MIN_SIGNAL_COVERAGE
+    )
+    df["analysis_status"] = np.select(
+        [
+            available_weight.eq(0),
+            df["signal_coverage"] < config.MIN_SIGNAL_COVERAGE,
+            df["signal_coverage"] < 0.999999,
+        ],
+        ["NO_DATA", "INSUFFICIENT_DATA", "PARTIAL"],
+        default="COMPLETE",
+    )
     logger.info("Calculated total signal successfully. ticker=%s", ticker)
     return df
 
@@ -303,6 +398,6 @@ def convert_signal_to_text(df):
         (df["Signal"] >= config.STRONG_BUY_THRESHOLD),
     ]
     choices = ["STRONG SELL", "WEAK SELL", "HOLD", "WEAK BUY", "STRONG BUY"]
-    df["Signal_Text"] = np.select(conditions, choices, default="HOLD")
+    df["Signal_Text"] = np.select(conditions, choices, default="INSUFFICIENT DATA")
     logger.info("Converted numeric signals to text labels. ticker=%s", ticker)
     return df

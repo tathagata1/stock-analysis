@@ -24,7 +24,9 @@ MULTIFACTOR_WEIGHTS = {
 
 
 def _normalize_numeric_or_missing(value):
-    if value in (None, "", MISSING_VALUE):
+    if value is None or (
+        isinstance(value, str) and value.strip() in {"", MISSING_VALUE}
+    ):
         return MISSING_VALUE
     try:
         if pd.isna(value):
@@ -161,6 +163,20 @@ def _safe_ratio(numerator, denominator, fallback=MISSING_VALUE):
     if denominator_value == 0:
         return fallback
     return float(normalized_numerator) / denominator_value
+
+
+def _safe_ratio_positive_denominator(numerator, denominator, fallback=MISSING_VALUE):
+    normalized_denominator = _normalize_numeric_or_missing(denominator)
+    if normalized_denominator == MISSING_VALUE or float(normalized_denominator) <= 0:
+        return fallback
+    return _safe_ratio(numerator, normalized_denominator, fallback=fallback)
+
+
+def _has_any_metric(metrics, keys):
+    return any(
+        _normalize_numeric_or_missing(_get_metric(metrics, key)) != MISSING_VALUE
+        for key in keys
+    )
 
 
 def _safe_growth(current_value, previous_value, fallback=MISSING_VALUE):
@@ -561,7 +577,7 @@ def get_analyst_sentiment_factor_score(advanced_stats):
     return score
 
 
-def calculate_multifactor_model(price_history, value_stats, advanced_stats, sentiment_score: float = 0.0):
+def calculate_multifactor_model(price_history, value_stats, advanced_stats, sentiment_score=None):
     ticker = price_history["TICKER"].iloc[0] if not price_history.empty and "TICKER" in price_history.columns else _get_metric(advanced_stats, "TICKER")
     logger.info("Calculating multi-factor model. ticker=%s", ticker)
 
@@ -572,17 +588,79 @@ def calculate_multifactor_model(price_history, value_stats, advanced_stats, sent
     volatility_details = get_volatility_factor_score(price_history, advanced_stats)
     financial_strength_score = fundamental_analysis.get_financial_strength_factor_score(advanced_stats)
     analyst_sentiment_score = get_analyst_sentiment_factor_score(advanced_stats)
-    combined_sentiment_score = _clamp_score((float(sentiment_score) * 0.7) + (analyst_sentiment_score * 0.3))
+    news_sentiment = _normalize_numeric_or_missing(sentiment_score)
+    analyst_available = _has_any_metric(
+        advanced_stats,
+        ["Analyst Recommendation Score", "Price Target Upside"],
+    )
+    sentiment_parts = []
+    if news_sentiment != MISSING_VALUE:
+        sentiment_parts.append((float(news_sentiment), 0.7))
+    if analyst_available:
+        sentiment_parts.append((analyst_sentiment_score, 0.3))
+    combined_sentiment_score = (
+        _clamp_score(
+            sum(value * weight for value, weight in sentiment_parts)
+            / sum(weight for _, weight in sentiment_parts)
+        )
+        if sentiment_parts
+        else 0.0
+    )
     risk_score = _clamp_score((volatility_details["score"] + financial_strength_score) / 2)
     liquidity_score = get_institutional_liquidity_factor_score(advanced_stats)
 
-    final_score = _clamp_score(
-        MULTIFACTOR_WEIGHTS["value"] * value_score
-        + MULTIFACTOR_WEIGHTS["quality"] * quality_score
-        + MULTIFACTOR_WEIGHTS["momentum"] * momentum_details["score"]
-        + MULTIFACTOR_WEIGHTS["sentiment"] * combined_sentiment_score
-        + MULTIFACTOR_WEIGHTS["risk"] * risk_score
-        + MULTIFACTOR_WEIGHTS["liquidity"] * liquidity_score
+    availability = {
+        "value": _has_any_metric(
+            value_stats,
+            [
+                "Market Cap", "Enterprise Value", "Trailing P/E", "Forward P/E",
+                "PEG Ratio (5yr expected)", "Price/Sales", "Price/Book",
+                "Enterprise Value/Revenue", "Enterprise Value/EBITDA",
+            ],
+        ),
+        "quality": _has_any_metric(
+            advanced_stats,
+            [
+                "ROIC", "ROE", "Gross Margin", "Operating Margin",
+                "Free Cash Flow Margin", "EPS Growth (1y)", "Revenue Growth",
+            ],
+        ),
+        "momentum": any(
+            _normalize_numeric_or_missing(momentum_details[key]) != MISSING_VALUE
+            for key in ["3_month_return", "6_month_return", "12_month_return"]
+        ),
+        "sentiment": bool(sentiment_parts),
+        "risk": any(
+            _normalize_numeric_or_missing(volatility_details[key]) != MISSING_VALUE
+            for key in ["historical_volatility", "maximum_drawdown", "sharpe_ratio", "sortino_ratio"]
+        ) or _has_any_metric(advanced_stats, ["Beta", "Altman Z-Score", "Current Ratio"]),
+        "liquidity": _has_any_metric(
+            advanced_stats,
+            ["Average Daily Volume", "Volume / Market Cap", "Bid-Ask Spread"],
+        ),
+    }
+    component_scores = {
+        "value": value_score,
+        "quality": quality_score,
+        "momentum": momentum_details["score"],
+        "sentiment": combined_sentiment_score,
+        "risk": risk_score,
+        "liquidity": liquidity_score,
+    }
+    available_weight = sum(
+        MULTIFACTOR_WEIGHTS[name] for name, is_available in availability.items()
+        if is_available
+    )
+    final_score = (
+        _clamp_score(
+            sum(
+                MULTIFACTOR_WEIGHTS[name] * component_scores[name]
+                for name, is_available in availability.items()
+                if is_available
+            ) / available_weight
+        )
+        if available_weight > 0
+        else float("nan")
     )
 
     result = {
@@ -591,7 +669,9 @@ def calculate_multifactor_model(price_history, value_stats, advanced_stats, sent
         "quality_score": quality_score,
         "earnings_growth_score": earnings_growth_score,
         "momentum_score": momentum_details["score"],
-        "sentiment_score": float(sentiment_score),
+        "sentiment_score": (
+            float(news_sentiment) if news_sentiment != MISSING_VALUE else float("nan")
+        ),
         "analyst_sentiment_score": analyst_sentiment_score,
         "combined_sentiment_score": combined_sentiment_score,
         "volatility_score": volatility_details["score"],
@@ -599,6 +679,10 @@ def calculate_multifactor_model(price_history, value_stats, advanced_stats, sent
         "risk_score": risk_score,
         "liquidity_score": liquidity_score,
         "final_score": final_score,
+        "factor_coverage": available_weight,
+        "available_factors": ",".join(
+            name for name, is_available in availability.items() if is_available
+        ),
         "3_month_return": momentum_details["3_month_return"],
         "6_month_return": momentum_details["6_month_return"],
         "12_month_return": momentum_details["12_month_return"],
@@ -614,7 +698,7 @@ def calculate_multifactor_model(price_history, value_stats, advanced_stats, sent
     return result
 
 
-def calculate_multifactor_model_frame(price_history, value_stats, advanced_stats, sentiment_score: float = 0.0):
+def calculate_multifactor_model_frame(price_history, value_stats, advanced_stats, sentiment_score=None):
     return pd.DataFrame([calculate_multifactor_model(price_history, value_stats, advanced_stats, sentiment_score=sentiment_score)])
 
 
@@ -670,7 +754,7 @@ def derive_advanced_financial_metrics(raw_financial_data):
     roic = _safe_ratio(nopat, invested_capital)
     roe = _get_metric(raw_financial_data, "Return On Equity Raw")
     if roe == MISSING_VALUE:
-        roe = _safe_ratio(net_income, stockholders_equity)
+        roe = _safe_ratio_positive_denominator(net_income, stockholders_equity)
     gross_margin = _get_metric(raw_financial_data, "Gross Margins Raw")
     if gross_margin == MISSING_VALUE:
         gross_margin = _safe_ratio(gross_profit, total_revenue)
@@ -679,7 +763,7 @@ def derive_advanced_financial_metrics(raw_financial_data):
     if operating_margin == MISSING_VALUE:
         operating_margin = _safe_ratio(operating_income, total_revenue)
     free_cash_flow_margin = _safe_ratio(free_cash_flow, total_revenue)
-    debt_to_ebitda = _safe_ratio(total_debt, ebitda)
+    debt_to_ebitda = _safe_ratio_positive_denominator(total_debt, ebitda)
     interest_coverage = _safe_ratio(operating_income, abs(float(interest_expense)) if _normalize_numeric_or_missing(interest_expense) != MISSING_VALUE else MISSING_VALUE)
     diluted_eps_payload = raw_financial_data.get("Diluted EPS Values") if hasattr(raw_financial_data, "get") else None
     eps_values = _parse_json_float_list(diluted_eps_payload)
@@ -704,10 +788,12 @@ def derive_advanced_financial_metrics(raw_financial_data):
         quick_ratio = _safe_ratio(float(current_assets) - float(inventory), current_liabilities)
     debt_to_equity = _get_metric(raw_financial_data, "Debt To Equity Raw")
     if debt_to_equity == MISSING_VALUE:
-        debt_to_equity = _safe_ratio(total_debt, stockholders_equity)
+        debt_to_equity = _safe_ratio_positive_denominator(total_debt, stockholders_equity)
     net_debt_to_ebitda = MISSING_VALUE
     if _normalize_numeric_or_missing(total_debt) != MISSING_VALUE and _normalize_numeric_or_missing(cash_and_equivalents) != MISSING_VALUE:
-        net_debt_to_ebitda = _safe_ratio(float(total_debt) - float(cash_and_equivalents), ebitda)
+        net_debt_to_ebitda = _safe_ratio_positive_denominator(
+            float(total_debt) - float(cash_and_equivalents), ebitda
+        )
     average_daily_volume = _get_metric(raw_financial_data, "Average Daily Volume")
     market_cap = _get_metric(raw_financial_data, "Market Cap")
     current_price = _get_metric(raw_financial_data, "Current Price")
@@ -778,7 +864,7 @@ def build_multifactor_analysis(ticker, period="1y", include_sentiment=False):
     value_stats = pd.DataFrame(dao.get_yahoo_finance_key_stats(ticker)).iloc[0]
     raw_advanced_data = pd.DataFrame(dao.get_advanced_financial_metrics(ticker)).iloc[0]
     advanced_stats = derive_advanced_financial_metrics(raw_advanced_data).iloc[0]
-    sentiment_score: float = sentiment_analysis.apply_sentiment_analysis(ticker) if include_sentiment else 0.0
+    sentiment_score = sentiment_analysis.apply_sentiment_analysis(ticker) if include_sentiment else None
     score_frame = calculate_multifactor_model_frame(
         price_history=price_history,
         value_stats=value_stats,

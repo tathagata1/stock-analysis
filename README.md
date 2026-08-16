@@ -89,6 +89,7 @@ When those signals align, the result should be more meaningful than any single f
 ```text
 stock analysis/
 |-- 03_index_search.ipynb
+|-- 04_backtesting.ipynb
 |-- analysis_functions/
 |   |-- technical_analysis.py
 |   |-- fundamental_analysis.py
@@ -105,9 +106,16 @@ stock analysis/
 |   |-- config.py
 |   |-- example.config.ini
 |   |-- logging_config.py
+|-- backtesting/
+|   |-- data.py
+|   |-- engine.py
+|   |-- signal.py
+|   |-- reporting.py
+|   |-- workflow.py
+|-- tests/
 |-- cache/
 |-- output/
-|-- portfolio/
+|-- pyproject.toml
 ```
 
 ## Module Breakdown
@@ -146,6 +154,16 @@ The notebook-facing orchestration layer.
 - `interface_specific_stock.py`: single ticker analysis helpers
 - `interface_index_search.py`: index scan and ranking workflows
 
+### `backtesting/`
+
+The independent price-intent strategy package.
+
+- `data.py`: normalized, cached ticker and benchmark history
+- `engine.py`: causal rolling levels, fills, position accounting, and metrics
+- `signal.py`: one-session-lagged backtest for precomputed composite signals
+- `reporting.py`: trade detail, charts, and CSV exports
+- `workflow.py`: single- and multi-ticker market-data preparation
+
 ## Notebook Workflows
 
 ### `03_index_search.ipynb`
@@ -158,6 +176,22 @@ Example parameters already present in the notebook:
 - per-index limits via `limits_by_index`
 - `include_sentiment = False`
 - `period = "1y"`
+
+The scan calculates full technical history but, by default, performs the
+expensive fundamental and multifactor enrichment only for the latest row.
+Failures are retained in a separate scan table instead of terminating a universe.
+
+### `04_backtesting.ipynb`
+
+Backtests a rolling low/high channel with ATR-based risk controls. This is a
+separate price-intent strategy and does not validate the composite index-search
+signal. Daily-bar entry ambiguity, dynamic-versus-entry levels, stop widening,
+costs, and end liquidation are explicit parameters.
+
+For the composite signal itself, call
+`backtesting.run_composite_signal_backtest` with a historical prediction frame.
+Every decision is shifted by one session and executes at the next open. Results
+still depend on the historical input data and universe supplied by the caller.
 
 ## Signal Engine
 
@@ -225,7 +259,11 @@ The prediction pipeline includes a point-in-time-style financial snapshot proces
 - applies availability lags to approximate when reports would have been known,
 - maps market observations to the latest available fundamentals at that point in time.
 
-This prevents historical observations from being enriched with financial information that had not been published yet.
+Quarterly flow values are converted to trailing-twelve-month totals, annual and
+quarterly comparisons remain frequency-safe, fiscal-year overlaps use the more
+conservative annual lag, and historical statement share counts are preferred.
+The availability dates are still estimated lags—not actual filing timestamps—so
+this reduces obvious leakage but is not a substitute for a true as-of filings data source.
 
 ## Tech Stack
 
@@ -250,11 +288,12 @@ python -m venv .venv
 
 ### 2. Install dependencies
 
-Install the runtime dependencies, then add Jupyter Notebook for the notebook workflow:
+Install the pinned runtime dependencies. Use the development file when running
+tests or notebooks:
 
 ```powershell
 pip install -r requirements.txt
-pip install notebook
+pip install -r requirements-dev.txt
 ```
 
 ### 3. Configure the project
@@ -265,7 +304,8 @@ Use the example config as your template:
 Copy-Item config\example.config.ini config\config.ini
 ```
 
-Then update `config/config.ini` with your local settings, especially:
+Then update `config/config.ini` with your local settings. Prefer the
+`OPENAI_API_KEY` environment variable over storing a key in the file.
 
 - `chatgpt_key`
 - signal weights
@@ -280,14 +320,22 @@ Launch Jupyter and open the index-search notebook:
 jupyter notebook
 ```
 
-Open `03_index_search.ipynb` to scan supported indexes and rank opportunities. The single-stock analysis pipeline is also available through `analysis_interfaces/interface_specific_stock.py`.
+Open `03_index_search.ipynb` to scan supported indexes and rank opportunities,
+or `04_backtesting.ipynb` to run the separate price-intent backtest. The
+single-stock analysis pipeline is also available through
+`analysis_interfaces/interface_specific_stock.py`.
+
+Run the deterministic regression suite with:
+
+```powershell
+python -m pytest
+```
 
 ## Outputs and Operational Folders
 
 - `cache/`: cached index constituent lists
 - `logs/`: rotating application logs
 - `output/`: exported workflow outputs such as signal tables
-- `portfolio/`: local portfolio state and portfolio-related artifacts
 
 ## Configuration Surface
 
@@ -302,6 +350,8 @@ You can control:
 - stochastic oscillator parameters
 - MACD fast/slow/signal periods
 - signal component weights
+- minimum required signal coverage
+- causal volume and rolling VWAP windows
 - buy/sell cutoffs
 - cache expiry
 - log level and log location
@@ -323,8 +373,9 @@ In other words: this is not just a collection of notebooks. It is the early-stag
 
 Natural next steps for the project:
 
-- add a pinned `requirements.txt` or `pyproject.toml`
-- add unit tests around signal math and factor scoring
+- build walk-forward validation around the lagged composite-signal backtester
+- replace estimated reporting lags with actual filing timestamps
+- add historical index membership and delisting data
 - persist historical scan results for time-series comparison
 - add portfolio allocation logic on top of single-name signals
 - build a lightweight dashboard for ranked ideas

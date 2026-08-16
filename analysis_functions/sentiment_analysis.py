@@ -1,7 +1,7 @@
 import json
 
 import dao.dao as dao
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from config.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -16,17 +16,21 @@ def get_news_sentiment(stock, gpt_resp):
             recent_articles = []
             for article in articles:
                 try:
-                    published_at = datetime.strptime(article['publishedAt'], "%Y-%m-%dT%H:%M:%SZ")
+                    published_at = datetime.strptime(
+                        article['publishedAt'], "%Y-%m-%dT%H:%M:%SZ"
+                    ).replace(tzinfo=timezone.utc)
                 except Exception:
                     continue
-                age = datetime.now() - published_at
+                age = datetime.now(timezone.utc) - published_at
                 if age <= timedelta(days=30):
                     recent_articles.append((published_at, article))
 
             recent_articles.sort(key=lambda item: item[0], reverse=True)
 
             for _, article in recent_articles[:MAX_NEWS_ARTICLES_FOR_SENTIMENT]:
-                age = datetime.now() - datetime.strptime(article['publishedAt'], "%Y-%m-%dT%H:%M:%SZ")
+                age = datetime.now(timezone.utc) - datetime.strptime(
+                    article['publishedAt'], "%Y-%m-%dT%H:%M:%SZ"
+                ).replace(tzinfo=timezone.utc)
                 if age <= timedelta(days=30):
                     post = ".".join([
                         str((article.get('source') or {}).get('name') or ""),
@@ -46,15 +50,27 @@ def get_news_sentiment(stock, gpt_resp):
 def apply_sentiment_analysis(stock):
     logger.info("Running sentiment analysis. ticker=%s", stock)
     payloads = get_news_sentiment(stock, [])
-    try:
-        scores = [
-            float(item["score"])
-            for item in (json.loads(payload) for payload in payloads)
-            if float(item["confidence"]) >= 0.90
-        ]
-    except Exception:
-        logger.exception("Sentiment payload parsing failed. ticker=%s", stock)
-        return 0
+    scores = []
+    invalid_payloads = 0
+    for payload in payloads:
+        try:
+            item = json.loads(payload)
+            score = float(item["score"])
+            confidence = float(item["confidence"])
+            if not -1 <= score <= 1 or not 0 <= confidence <= 1:
+                raise ValueError("Sentiment values are outside their documented range")
+            if confidence >= 0.90:
+                scores.append(score)
+        except (TypeError, ValueError, KeyError, json.JSONDecodeError):
+            invalid_payloads += 1
+            logger.warning("Ignoring malformed sentiment payload. ticker=%s", stock)
     score = sum(scores) / len(scores) if scores else 0
-    logger.info("Completed sentiment analysis. ticker=%s high_confidence_scores=%s sentiment_score=%s", stock, len(scores), score)
+    logger.info(
+        "Completed sentiment analysis. ticker=%s high_confidence_scores=%s "
+        "invalid_payloads=%s sentiment_score=%s",
+        stock,
+        len(scores),
+        invalid_payloads,
+        score,
+    )
     return score
