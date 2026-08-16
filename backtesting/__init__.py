@@ -13,7 +13,7 @@ from .reporting import (
     prepare_backtest_results,
     prepare_trade_details,
 )
-from .workflow import load_backtest_market_data
+from .workflow import load_backtest_market_data, load_multiple_backtest_market_data
 
 __all__ = [
     "build_dynamic_price_levels",
@@ -21,6 +21,7 @@ __all__ = [
     "current_index_membership",
     "export_backtest_results",
     "load_backtest_market_data",
+    "load_multiple_backtest_market_data",
     "load_price_history_cached",
     "plot_backtest_results",
     "prepare_backtest_results",
