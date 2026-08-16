@@ -43,6 +43,7 @@ def _validate_backtest_inputs(
     share_limit,
     entries_limit,
     wait_days,
+    minimum_holding_days,
     holding_limit,
     trailing_pct,
     fee,
@@ -65,8 +66,16 @@ def _validate_backtest_inputs(
         raise ValueError("max_shares must be greater than zero or None")
     if int(entries_limit) < 1 or int(wait_days) < 0:
         raise ValueError("max_entries must be at least 1 and cooldown_days cannot be negative")
+    if minimum_holding_days is not None and int(minimum_holding_days) < 0:
+        raise ValueError("min_holding_days must be non-negative or None")
     if holding_limit is not None and int(holding_limit) < 1:
         raise ValueError("max_holding_days must be at least 1 or None")
+    if (
+        minimum_holding_days is not None
+        and holding_limit is not None
+        and int(minimum_holding_days) > int(holding_limit)
+    ):
+        raise ValueError("min_holding_days cannot exceed max_holding_days")
     if trailing_pct is not None and not 0 < float(trailing_pct) < 1:
         raise ValueError("trailing_stop_pct must be between 0 and 1 or None")
     if float(fee) < 0 or float(slip_bps) < 0:
@@ -130,6 +139,7 @@ def run_price_intent_backtest(
     slip_bps=0.0,
     priority="stop",
     liquidate_at_end=True,
+    minimum_holding_days=None,
 ):
     """Run the long-only backtest and return results as pandas data frames."""
     prices = normalize_history(history)
@@ -143,6 +153,7 @@ def run_price_intent_backtest(
         share_limit,
         entries_limit,
         wait_days,
+        minimum_holding_days,
         holding_limit,
         trailing_pct,
         fee,
@@ -178,6 +189,13 @@ def run_price_intent_backtest(
             target_hit = target is not None and row["High"] >= float(target)
             stop_hit = pd.notna(active_stop) and row["Low"] <= active_stop
             holding_sessions = row_index - position["entry_index"]
+            minimum_hold_met = (
+                minimum_holding_days is None
+                or holding_sessions >= int(minimum_holding_days)
+            )
+
+            target_hit = minimum_hold_met and target_hit
+            stop_hit = minimum_hold_met and stop_hit
 
             exit_reason = None
             raw_exit = None
@@ -203,7 +221,11 @@ def run_price_intent_backtest(
             elif target_hit:
                 exit_reason = "TARGET"
                 raw_exit, fill_exit = _target_fill(row["Open"], target, slip_bps)
-            elif holding_limit is not None and holding_sessions >= int(holding_limit):
+            elif (
+                minimum_hold_met
+                and holding_limit is not None
+                and holding_sessions >= int(holding_limit)
+            ):
                 exit_reason = "TIME_LIMIT"
                 raw_exit, fill_exit = _market_fill(row["Close"], "sell", slip_bps)
             elif liquidate_at_end and row_index == len(prices) - 1:
