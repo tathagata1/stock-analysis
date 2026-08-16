@@ -41,7 +41,7 @@ INDEX_SOURCES = {
         "column": "Symbol",
     },
     "nasdaq100": {
-        "url": "https://en.wikipedia.org/wiki/Nasdaq-100",
+        "url": "https://en.wikipedia.org/wiki/List_of_NASDAQ-100_companies",
         "column": "Ticker",
     },
     "dow30": {

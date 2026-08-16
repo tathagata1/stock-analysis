@@ -1,5 +1,6 @@
 import configparser
 import logging
+import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -31,19 +32,37 @@ def _load_logging_settings():
     }
 
 
-def setup_logging():
+def _process_log_path(log_dir, log_file_name):
+    """Return a per-process path so Windows log rotation never crosses kernels."""
+    configured_path = Path(log_file_name)
+    suffix = configured_path.suffix or ".log"
+    stem = configured_path.stem if configured_path.suffix else configured_path.name
+    return log_dir / configured_path.parent / f"{stem}.{os.getpid()}{suffix}"
+
+
+def _reset_logger_handlers(logger):
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+        handler.close()
+    logger._stock_analysis_configured = False
+
+
+def setup_logging(force=False):
     settings = _load_logging_settings()
     logger = logging.getLogger(APP_LOGGER_NAME)
 
-    if getattr(logger, "_stock_analysis_configured", False):
+    if getattr(logger, "_stock_analysis_configured", False) and not force:
         return logger
+    if force:
+        _reset_logger_handlers(logger)
 
     logger.setLevel(settings["log_level"])
     logger.propagate = False
 
     log_dir = settings["log_dir"]
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / settings["log_file_name"]
+    log_path = _process_log_path(log_dir, settings["log_file_name"])
+    log_path.parent.mkdir(parents=True, exist_ok=True)
 
     formatter = logging.Formatter(
         "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
