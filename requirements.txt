@@ -1,5 +1,6 @@
 beautifulsoup4
 lxml
+matplotlib
 numpy
 openai>=1.0.0
 pandas

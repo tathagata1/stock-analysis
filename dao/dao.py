@@ -45,7 +45,7 @@ INDEX_SOURCES = {
         "column": "Ticker",
     },
     "dow30": {
-        "url": "https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average",
+        "url": "https://en.wikipedia.org/wiki/List_of_Dow_Jones_Industrial_Average_companies",
         "column": "Symbol",
     },
 }
