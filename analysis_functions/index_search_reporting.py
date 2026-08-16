@@ -537,21 +537,191 @@ def plot_candidate_details(ticker, analysis):
     return fig
 
 
-def export_index_search_tables(
+def build_combined_index_search_output(
     ranked,
     signal_only,
     detailed_ranked,
+):
+    """Combine ranking, actionability, index membership, and detail metrics."""
+    if ranked.empty:
+        return pd.DataFrame()
+
+    required_ranked_columns = {"index_name", "TICKER", "Signal", "Signal_Text"}
+    missing_ranked_columns = required_ranked_columns.difference(ranked.columns)
+    if missing_ranked_columns:
+        raise ValueError(
+            "ranked is missing required columns: "
+            + ", ".join(sorted(missing_ranked_columns))
+        )
+    required_detail_columns = {"Rank", "TICKER"}
+    missing_detail_columns = required_detail_columns.difference(
+        detailed_ranked.columns
+    )
+    if missing_detail_columns:
+        raise ValueError(
+            "detailed_ranked is missing required columns: "
+            + ", ".join(sorted(missing_detail_columns))
+        )
+
+    summary = ranked.copy().rename(
+        columns={"index_name": "Index_Name", "current_date": "Run_Date"}
+    )
+    summary.insert(
+        summary.columns.get_loc("TICKER"),
+        "Index_Rank",
+        summary.groupby("Index_Name", sort=False).cumcount() + 1,
+    )
+
+    detail_columns = [
+        column
+        for column in detailed_ranked.columns
+        if column not in {"Indexes", "Signal", "Signal_Text"}
+    ]
+    details = detailed_ranked[detail_columns].rename(
+        columns={"Rank": "Overall_Rank"}
+    )
+    combined = summary.merge(
+        details,
+        how="left",
+        on="TICKER",
+        validate="many_to_one",
+    )
+
+    actionable_keys = set()
+    if not signal_only.empty and {"index_name", "TICKER"}.issubset(
+        signal_only.columns
+    ):
+        actionable_keys = set(
+            zip(
+                signal_only["index_name"].astype(str),
+                signal_only["TICKER"].astype(str),
+            )
+        )
+    combined.insert(
+        combined.columns.get_loc("Signal_Text"),
+        "Actionable",
+        [
+            (str(index_name), str(ticker)) in actionable_keys
+            for index_name, ticker in zip(
+                combined["Index_Name"], combined["TICKER"]
+            )
+        ],
+    )
+
+    leading_columns = [
+        column
+        for column in [
+            "Overall_Rank",
+            "Index_Rank",
+            "Index_Name",
+            "Run_Date",
+            "TICKER",
+            "Actionable",
+            "Signal_Text",
+            "Signal",
+        ]
+        if column in combined.columns
+    ]
+    remaining_columns = [
+        column for column in combined.columns if column not in leading_columns
+    ]
+    return combined[leading_columns + remaining_columns].sort_values(
+        ["Overall_Rank", "Index_Name", "TICKER"],
+        na_position="last",
+    ).reset_index(drop=True)
+
+
+def plot_combined_index_insight(combined_output):
+    """Plot signal composition and average directional score for each index."""
+    if combined_output.empty:
+        return None
+
+    required_columns = {"Index_Name", "Signal_Text", "Signal"}
+    missing_columns = required_columns.difference(combined_output.columns)
+    if missing_columns:
+        raise ValueError(
+            "combined_output is missing required columns: "
+            + ", ".join(sorted(missing_columns))
+        )
+
+    chart_data = combined_output.dropna(subset=["Index_Name"]).copy()
+    if chart_data.empty:
+        return None
+
+    signal_composition = (
+        pd.crosstab(chart_data["Index_Name"], chart_data["Signal_Text"])
+        .reindex(columns=SIGNAL_ORDER, fill_value=0)
+        .sort_index()
+    )
+    average_signal = (
+        chart_data.groupby("Index_Name")["Signal"]
+        .mean()
+        .reindex(signal_composition.index)
+        .fillna(0)
+    )
+
+    figure_height = max(5.5, 0.75 * len(signal_composition))
+    fig, (ax_composition, ax_direction) = plt.subplots(
+        1,
+        2,
+        figsize=(18, figure_height),
+        gridspec_kw={"width_ratios": [1.35, 1]},
+    )
+    y_positions = np.arange(len(signal_composition))
+    left = np.zeros(len(signal_composition), dtype=float)
+    for signal_label in SIGNAL_ORDER:
+        counts = signal_composition[signal_label].to_numpy(dtype=float)
+        ax_composition.barh(
+            y_positions,
+            counts,
+            left=left,
+            label=signal_label.title(),
+            color=SIGNAL_COLORS[signal_label],
+        )
+        left += counts
+    ax_composition.set_yticks(y_positions, labels=signal_composition.index)
+    ax_composition.set_xlabel("Ticker memberships")
+    ax_composition.set_title("Signal composition by index")
+    ax_composition.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.16),
+        ncol=3,
+    )
+    ax_composition.invert_yaxis()
+
+    direction_colors = [
+        SIGNAL_COLORS["WEAK BUY"] if value >= 0 else SIGNAL_COLORS["WEAK SELL"]
+        for value in average_signal
+    ]
+    direction_bars = ax_direction.barh(
+        y_positions,
+        average_signal,
+        color=direction_colors,
+    )
+    ax_direction.axvline(0, color="#424242", linewidth=1)
+    ax_direction.set_yticks(y_positions, labels=average_signal.index)
+    ax_direction.set_xlabel("Average composite signal")
+    ax_direction.set_title("Directional lean by index")
+    ax_direction.invert_yaxis()
+    ax_direction.bar_label(direction_bars, fmt="%.3f", padding=4)
+    signal_limit = max(
+        0.5,
+        float(average_signal.abs().max()) * 1.25,
+    )
+    ax_direction.set_xlim(-signal_limit, signal_limit)
+
+    fig.suptitle("Combined index-search insight", fontsize=15, y=0.98)
+    fig.tight_layout(rect=[0, 0.08, 1, 0.92])
+    return fig
+
+
+def export_combined_index_search_output(
+    combined_output,
     output_directory="output",
 ):
-    """Export the raw, actionable, and detailed index-search tables."""
+    """Export the combined index-search report to one CSV file."""
     output_path = Path(output_directory)
     output_path.mkdir(parents=True, exist_ok=True)
-    export_files = {
-        "ranked": output_path / "index_search_ranked.csv",
-        "signals": output_path / "signal_only.csv",
-        "details": output_path / "index_search_detailed_candidates.csv",
-    }
-    ranked.to_csv(export_files["ranked"], index=False)
-    signal_only.to_csv(export_files["signals"], index=False)
-    detailed_ranked.to_csv(export_files["details"], index=False)
-    return export_files
+    output_file = output_path / "index_search_combined.csv"
+    combined_output.to_csv(output_file, index=False)
+    return output_file
