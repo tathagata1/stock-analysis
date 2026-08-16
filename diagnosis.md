@@ -27,7 +27,7 @@ The original audit contained 26 findings. The current disposition is 16 resolved
 |---:|---|---|---|
 | 1 | High-volume feature used future observations | Resolved | Volume baseline is a prior-session rolling mean using `shift(1)`; warm-up remains missing rather than false. |
 | 2 | Historical fundamentals were not backtest-grade | Improved | Quarterly flows are TTM, annual/quarterly frequency is preserved, overlapping annual rows win, shares come from statements, and estimated availability lags are recorded. Actual filing timestamps and restatements remain unresolved. |
-| 3 | Minimum holding period disabled stops | Resolved | Protective stops are always active; minimum holding applies only to target/time exits. |
+| 3 | Minimum holding exit priority | Policy updated | Minimum holding now gates fixed stops, trailing stops, targets, and time exits. |
 | 4 | Backtester did not test composite signals | Resolved | `run_composite_signal_backtest` evaluates a historical prediction frame with every signal shifted one session and execution at the next open. |
 | 5 | Current constituents create survivorship bias | Open | Membership is cached and refresh-safe, but it is still current membership. Historical constituent data is required for a full fix. |
 | 6 | Missing inputs were treated as neutral | Resolved | Missing factors are excluded, weights are renormalized, coverage is reported, and low-coverage rows become `INSUFFICIENT DATA`. |
@@ -121,7 +121,7 @@ Important explicit policies are:
 - `entry_bar_exit_policy`: `defer`, `stop`, or `target` when the entry bar touches an exit level;
 - `level_update_mode`: `entry` for fixed entry-time levels or `dynamic` for recomputed levels;
 - `allow_stop_widening=False`: the default prevents an active stop moving against the position;
-- protective stops remain active during `minimum_holding_days`; and
+- `minimum_holding_days` blocks every normal exit until the threshold is reached; and
 - trade, round-trip, equity, passive, benchmark, summary, and execution-assumption outputs are returned together.
 
 ### Composite-signal backtest
@@ -221,7 +221,7 @@ Remaining cache engineering work includes file locking for concurrent writers, r
 
 ### `backtesting/engine.py`
 
-The engine now makes ambiguous or consequential execution rules parameters instead of hiding them in control flow. Protective stops, entry-bar policy, level updating, non-widening stops, adjusted passive comparison, and richer statistics all have regression coverage.
+The engine now makes ambiguous or consequential execution rules parameters instead of hiding them in control flow. Minimum-hold exit gating, entry-bar policy, level updating, non-widening stops, adjusted passive comparison, and richer statistics all have regression coverage.
 
 The simulation is deliberately daily-bar and deterministic. When a bar touches multiple prices, the selected policy is an assumption rather than recovered intraday path. It also omits dividends in strategy cash, taxes, borrow mechanics, margin interest, market impact, partial fills, volume constraints, halts, and corporate-action-specific order handling.
 
@@ -292,7 +292,7 @@ The current automated suite contains 29 tests covering:
 - malformed sentiment payload isolation and strict OpenAI JSON Schema requests;
 - ticker failure isolation and duplicate analysis reuse;
 - stale index-cache fallback;
-- protective stops during minimum holding, entry-bar policy, stop widening, and adjusted passive return;
+- minimum-hold exit gating, entry-bar policy, stop widening, and adjusted passive return;
 - one-session lag/no same-session trade in the composite-signal backtester; and
 - configuration/import behavior outside the repository working directory.
 

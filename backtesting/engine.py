@@ -129,12 +129,17 @@ def _validate_backtest_inputs(
     allow_short,
     entry_bar_exit_policy,
     level_update_mode,
+    entry_at_market,
+    market_entry_side,
+    target_pct,
+    fixed_stop_pct,
 ):
     if history.empty:
         raise ValueError("Price history is empty")
-    entry_values = levels["entry_limit"].dropna()
-    if entry_values.empty or not entry_values.gt(0).all():
-        raise ValueError("buy_price must contain positive values")
+    if not entry_at_market:
+        entry_values = levels["entry_limit"].dropna()
+        if entry_values.empty or not entry_values.gt(0).all():
+            raise ValueError("buy_price must contain positive values")
     _validate_relationship(
         levels["target"],
         levels["entry_limit"],
@@ -153,7 +158,7 @@ def _validate_backtest_inputs(
     ).all():
         raise ValueError("trailing_stop_pct values must be between 0 and 1")
 
-    if allow_short:
+    if allow_short and not entry_at_market:
         short_entry_values = levels["short_entry_limit"].dropna()
         if short_entry_values.empty or not short_entry_values.gt(0).all():
             raise ValueError("Short entry prices must contain positive values")
@@ -196,6 +201,15 @@ def _validate_backtest_inputs(
         raise ValueError('entry_bar_exit_policy must be "defer", "stop", or "target"')
     if level_update_mode not in {"dynamic", "entry"}:
         raise ValueError('level_update_mode must be either "dynamic" or "entry"')
+    normalized_market_side = str(market_entry_side).strip().lower()
+    if normalized_market_side not in {"long", "short"}:
+        raise ValueError('market_entry_side must be either "long" or "short"')
+    if entry_at_market and normalized_market_side == "short" and not allow_short:
+        raise ValueError("market_entry_side='short' requires allow_short=True")
+    if target_pct is not None and not 0 < float(target_pct) < 1:
+        raise ValueError("target_pct must be between 0 and 1 or None")
+    if fixed_stop_pct is not None and not 0 < float(fixed_stop_pct) < 1:
+        raise ValueError("fixed_stop_pct must be between 0 and 1 or None")
 
 
 def _buy_fill(open_price, limit_price, slip_bps):
@@ -323,8 +337,18 @@ def run_price_intent_backtest(
     entry_bar_exit_policy="defer",
     level_update_mode="dynamic",
     allow_stop_widening=False,
+    entry_at_market=False,
+    market_entry_side="long",
+    target_pct=None,
+    fixed_stop_pct=None,
 ):
-    """Run a one-position long/short backtest and return result data frames."""
+    """Run a one-position long/short backtest and return result data frames.
+
+    ``entry_at_market`` enters at an eligible session's opening price. When
+    ``target_pct`` or ``fixed_stop_pct`` is supplied, that exit level is
+    calculated from the actual slipped entry fill and locked to the position.
+    This lets every re-entry establish fresh percentage-based price levels.
+    """
     prices = normalize_history(history)
     benchmark_prices = normalize_history(benchmark)
     short_entry_limit = target if allow_short and short_entry_limit is None else short_entry_limit
@@ -364,6 +388,10 @@ def run_price_intent_backtest(
         allow_short,
         entry_bar_exit_policy,
         level_update_mode,
+        entry_at_market,
+        market_entry_side,
+        target_pct,
+        fixed_stop_pct,
     )
 
     cash = float(capital)
@@ -405,7 +433,7 @@ def run_price_intent_backtest(
                     )
                 current_fixed_stop = (
                     position["entry_fixed_stop"]
-                    if level_update_mode == "entry"
+                    if fixed_stop_pct is not None or level_update_mode == "entry"
                     else current["fixed_stop"]
                 )
                 if (
@@ -438,7 +466,7 @@ def run_price_intent_backtest(
                     position["last_active_stop"] = active_stop
                 target_level = (
                     position["entry_target"]
-                    if level_update_mode == "entry"
+                    if target_pct is not None or level_update_mode == "entry"
                     else current["target"]
                 )
                 target_hit = (
@@ -447,7 +475,8 @@ def run_price_intent_backtest(
                     and row["High"] >= target_level
                 )
                 stop_hit = (
-                    pd.notna(active_stop)
+                    minimum_hold_met
+                    and pd.notna(active_stop)
                     and row["Low"] <= active_stop
                 )
             else:
@@ -457,7 +486,7 @@ def run_price_intent_backtest(
                     )
                 current_fixed_stop = (
                     position["entry_fixed_stop"]
-                    if level_update_mode == "entry"
+                    if fixed_stop_pct is not None or level_update_mode == "entry"
                     else current["short_fixed_stop"]
                 )
                 if (
@@ -490,7 +519,7 @@ def run_price_intent_backtest(
                     position["last_active_stop"] = active_stop
                 target_level = (
                     position["entry_target"]
-                    if level_update_mode == "entry"
+                    if target_pct is not None or level_update_mode == "entry"
                     else current["short_target"]
                 )
                 target_hit = (
@@ -499,7 +528,8 @@ def run_price_intent_backtest(
                     and row["Low"] <= target_level
                 )
                 stop_hit = (
-                    pd.notna(active_stop)
+                    minimum_hold_met
+                    and pd.notna(active_stop)
                     and row["High"] >= active_stop
                 )
 
@@ -568,22 +598,30 @@ def run_price_intent_backtest(
             and entries < int(entries_limit)
             and (reentry or entries == 0)
         )
-        long_signal = (
-            can_consider_entry
-            and pd.notna(current["entry_limit"])
-            and row["Low"] <= current["entry_limit"]
-        )
-        short_signal = (
-            can_consider_entry
-            and allow_short
-            and pd.notna(current["short_entry_limit"])
-            and row["High"] >= current["short_entry_limit"]
-        )
+        if entry_at_market and can_consider_entry:
+            entry_side = str(market_entry_side).strip().upper()
+        else:
+            long_signal = (
+                can_consider_entry
+                and pd.notna(current["entry_limit"])
+                and row["Low"] <= current["entry_limit"]
+            )
+            short_signal = (
+                can_consider_entry
+                and allow_short
+                and pd.notna(current["short_entry_limit"])
+                and row["High"] >= current["short_entry_limit"]
+            )
 
-        # Long takes precedence if a daily candle touches both entry channels.
-        entry_side = "LONG" if long_signal else "SHORT" if short_signal else None
+            # Long takes precedence if a daily candle touches both entry channels.
+            entry_side = "LONG" if long_signal else "SHORT" if short_signal else None
         if entry_side is not None:
-            if entry_side == "LONG":
+            if entry_at_market:
+                market_side = "buy" if entry_side == "LONG" else "sell"
+                raw_entry, fill_entry = _market_fill(
+                    row["Open"], market_side, slip_bps
+                )
+            elif entry_side == "LONG":
                 raw_entry, fill_entry = _buy_fill(
                     row["Open"], current["entry_limit"], slip_bps
                 )
@@ -606,6 +644,18 @@ def run_price_intent_backtest(
             )
             can_fund = entry_side == "SHORT" or entry_cash_flow <= cash + 1e-9
             if quantity > 0 and can_fund:
+                entry_target = (
+                    fill_entry
+                    * (1 + float(target_pct) if entry_side == "LONG" else 1 - float(target_pct))
+                    if target_pct is not None
+                    else current["target"] if entry_side == "LONG" else current["short_target"]
+                )
+                entry_fixed_stop = (
+                    fill_entry
+                    * (1 - float(fixed_stop_pct) if entry_side == "LONG" else 1 + float(fixed_stop_pct))
+                    if fixed_stop_pct is not None
+                    else current["fixed_stop"] if entry_side == "LONG" else current["short_fixed_stop"]
+                )
                 cash += -entry_cash_flow if entry_side == "LONG" else entry_cash_flow
                 shares = quantity if entry_side == "LONG" else -quantity
                 entries += 1
@@ -618,32 +668,30 @@ def run_price_intent_backtest(
                     "return_basis": entry_notional + float(fee),
                     "highest_completed_high": float(row["High"]),
                     "lowest_completed_low": float(row["Low"]),
-                    "entry_target": (
-                        current["target"] if entry_side == "LONG" else current["short_target"]
-                    ),
-                    "entry_fixed_stop": (
-                        current["fixed_stop"]
-                        if entry_side == "LONG"
-                        else current["short_fixed_stop"]
-                    ),
+                    "entry_target": entry_target,
+                    "entry_fixed_stop": entry_fixed_stop,
                     "entry_trailing_pct": current["trailing_pct"],
-                    "last_fixed_stop": (
-                        current["fixed_stop"]
-                        if entry_side == "LONG"
-                        else current["short_fixed_stop"]
-                    ),
-                    "last_active_stop": (
-                        current["fixed_stop"]
-                        if entry_side == "LONG"
-                        else current["short_fixed_stop"]
-                    ),
+                    "last_fixed_stop": entry_fixed_stop,
+                    "last_active_stop": entry_fixed_stop,
                 }
+                if entry_side == "LONG":
+                    current["entry_limit"] = fill_entry
+                    current["target"] = entry_target
+                    current["fixed_stop"] = entry_fixed_stop
+                else:
+                    current["short_entry_limit"] = fill_entry
+                    current["short_target"] = entry_target
+                    current["short_fixed_stop"] = entry_fixed_stop
                 transactions.append(
                     {
                         "Date": date,
                         "action": "BUY" if entry_side == "LONG" else "SELL_SHORT",
                         "side": entry_side,
-                        "reason": "BUY_LIMIT" if entry_side == "LONG" else "SHORT_ENTRY",
+                        "reason": (
+                            "MARKET_ENTRY"
+                            if entry_at_market
+                            else "BUY_LIMIT" if entry_side == "LONG" else "SHORT_ENTRY"
+                        ),
                         "raw_price": raw_entry,
                         "fill_price": fill_entry,
                         "shares": quantity,
@@ -660,16 +708,36 @@ def run_price_intent_backtest(
         # after an intraday entry. Record that ambiguity and apply the caller's
         # explicit policy; the backwards-compatible default defers all exits.
         if position is not None and position["entry_index"] == row_index:
+            entry_minimum_hold_met = (
+                minimum_holding_days is None
+                or int(minimum_holding_days) == 0
+            )
             if position["side"] == "LONG":
                 entry_target_level = position["entry_target"]
                 entry_stop_level = position["entry_fixed_stop"]
-                entry_target_hit = pd.notna(entry_target_level) and row["High"] >= entry_target_level
-                entry_stop_hit = pd.notna(entry_stop_level) and row["Low"] <= entry_stop_level
+                entry_target_hit = (
+                    entry_minimum_hold_met
+                    and pd.notna(entry_target_level)
+                    and row["High"] >= entry_target_level
+                )
+                entry_stop_hit = (
+                    entry_minimum_hold_met
+                    and pd.notna(entry_stop_level)
+                    and row["Low"] <= entry_stop_level
+                )
             else:
                 entry_target_level = position["entry_target"]
                 entry_stop_level = position["entry_fixed_stop"]
-                entry_target_hit = pd.notna(entry_target_level) and row["Low"] <= entry_target_level
-                entry_stop_hit = pd.notna(entry_stop_level) and row["High"] >= entry_stop_level
+                entry_target_hit = (
+                    entry_minimum_hold_met
+                    and pd.notna(entry_target_level)
+                    and row["Low"] <= entry_target_level
+                )
+                entry_stop_hit = (
+                    entry_minimum_hold_met
+                    and pd.notna(entry_stop_level)
+                    and row["High"] >= entry_stop_level
+                )
 
             if entry_target_hit or entry_stop_hit:
                 entry_bar_ambiguities += 1
@@ -734,6 +802,16 @@ def run_price_intent_backtest(
 
         market_value = shares * row["Close"]
         strategy_equity = cash + market_value
+        displayed_levels = current.to_dict()
+        if position is not None:
+            if position["side"] == "LONG":
+                displayed_levels["entry_limit"] = position["entry_price"]
+                displayed_levels["target"] = position["entry_target"]
+                displayed_levels["fixed_stop"] = position["entry_fixed_stop"]
+            else:
+                displayed_levels["short_entry_limit"] = position["entry_price"]
+                displayed_levels["short_target"] = position["entry_target"]
+                displayed_levels["short_fixed_stop"] = position["entry_fixed_stop"]
         equity_rows.append(
             {
                 "Date": date,
@@ -745,7 +823,7 @@ def run_price_intent_backtest(
                 "strategy_equity": strategy_equity,
                 "action": action_today,
                 "active_stop": active_stop,
-                **current.to_dict(),
+                **displayed_levels,
             }
         )
 
@@ -892,6 +970,10 @@ def run_price_intent_backtest(
             "entry_bar_exit_policy": entry_bar_exit_policy,
             "level_update_mode": level_update_mode,
             "allow_stop_widening": bool(allow_stop_widening),
+            "entry_at_market": bool(entry_at_market),
+            "market_entry_side": str(market_entry_side).strip().lower(),
+            "target_pct": target_pct,
+            "fixed_stop_pct": fixed_stop_pct,
             "short_model": "simplified; excludes borrow fees, margin calls, and dividends owed",
         },
     }

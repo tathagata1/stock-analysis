@@ -48,7 +48,7 @@ def prepare_backtest_results(backtest):
         else pd.DataFrame(
             {
                 "message": [
-                    "No orders filled: the buy limit was not reached or capital was insufficient."
+                    "No orders filled: no entry was eligible or capital was insufficient."
                 ]
             }
         )
