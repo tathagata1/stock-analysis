@@ -41,7 +41,3 @@ logs/
 .vs/
 .DS_Store
 Thumbs.db
-
-# Local documentation files
-*.md
-!README.md
