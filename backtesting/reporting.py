@@ -69,13 +69,206 @@ def prepare_backtest_results(backtest):
     }
 
 
+def prepare_trade_details(backtest, ticker=None):
+    """Return one execution-style row for every simulated trade entry."""
+    transactions = backtest["transactions"]
+    round_trips = backtest["round_trips"]
+    equity_curve = backtest["equity_curve"]
+    entry_actions = ["BUY", "SELL_SHORT"]
+    exit_actions = ["SELL", "BUY_TO_COVER"]
+
+    entries = transactions[transactions["action"].isin(entry_actions)].copy()
+    if entries.empty:
+        return pd.DataFrame(
+            columns=[
+                "trade_number",
+                "ticker",
+                "side",
+                "status",
+                "buy_date",
+                "buy_price",
+                "sell_date",
+                "sell_price",
+                "entry_action",
+                "entry_date",
+                "entry_price",
+                "shares",
+                "entry_notional",
+                "entry_commission",
+                "cash_after_entry",
+                "planned_target_price",
+                "planned_stop_price",
+                "trailing_stop_pct",
+                "planned_risk_per_share",
+                "planned_reward_per_share",
+                "planned_reward_risk_ratio",
+                "exit_action",
+                "exit_date",
+                "exit_price",
+                "exit_notional",
+                "exit_commission",
+                "cash_after_exit",
+                "exit_reason",
+                "holding_sessions",
+                "realized_pnl",
+                "return_pct",
+            ]
+        )
+
+    entries = entries[
+        [
+            "entry_number",
+            "side",
+            "action",
+            "Date",
+            "fill_price",
+            "shares",
+            "gross_value",
+            "commission",
+            "cash_after",
+        ]
+    ].rename(
+        columns={
+            "action": "entry_action",
+            "Date": "entry_date",
+            "fill_price": "entry_price",
+            "gross_value": "entry_notional",
+            "commission": "entry_commission",
+            "cash_after": "cash_after_entry",
+        }
+    )
+    exits = transactions[transactions["action"].isin(exit_actions)][
+        [
+            "entry_number",
+            "side",
+            "action",
+            "Date",
+            "fill_price",
+            "gross_value",
+            "commission",
+            "cash_after",
+            "reason",
+        ]
+    ].rename(
+        columns={
+            "action": "exit_action",
+            "Date": "exit_date",
+            "fill_price": "exit_price",
+            "gross_value": "exit_notional",
+            "commission": "exit_commission",
+            "cash_after": "cash_after_exit",
+            "reason": "exit_reason",
+        }
+    )
+    completed = round_trips[
+        ["entry_number", "side", "holding_sessions", "pnl", "return_pct"]
+    ].rename(columns={"pnl": "realized_pnl"})
+    details = entries.merge(exits, on=["entry_number", "side"], how="left")
+    details = details.merge(completed, on=["entry_number", "side"], how="left")
+
+    level_columns = [
+        "Date",
+        "target",
+        "fixed_stop",
+        "trailing_pct",
+        "short_target",
+        "short_fixed_stop",
+    ]
+    entry_levels = equity_curve[level_columns].rename(
+        columns={
+            "Date": "entry_date",
+            "target": "long_target_at_entry",
+            "fixed_stop": "long_stop_at_entry",
+            "trailing_pct": "trailing_stop_pct",
+            "short_target": "short_target_at_entry",
+            "short_fixed_stop": "short_stop_at_entry",
+        }
+    )
+    details = details.merge(entry_levels, on="entry_date", how="left")
+    is_long = details["side"] == "LONG"
+    details["planned_target_price"] = details["long_target_at_entry"].where(
+        is_long, details["short_target_at_entry"]
+    )
+    details["planned_stop_price"] = details["long_stop_at_entry"].where(
+        is_long, details["short_stop_at_entry"]
+    )
+    details["planned_risk_per_share"] = (
+        details["entry_price"] - details["planned_stop_price"]
+    ).where(
+        is_long,
+        details["planned_stop_price"] - details["entry_price"],
+    )
+    details["planned_reward_per_share"] = (
+        details["planned_target_price"] - details["entry_price"]
+    ).where(
+        is_long,
+        details["entry_price"] - details["planned_target_price"],
+    )
+    details["planned_reward_risk_ratio"] = (
+        details["planned_reward_per_share"] / details["planned_risk_per_share"]
+    ).where(details["planned_risk_per_share"] > 0)
+    details["status"] = details["exit_date"].notna().map(
+        {True: "CLOSED", False: "OPEN"}
+    )
+    details["buy_date"] = details["entry_date"].where(
+        is_long, details["exit_date"]
+    )
+    details["buy_price"] = details["entry_price"].where(
+        is_long, details["exit_price"]
+    )
+    details["sell_date"] = details["exit_date"].where(
+        is_long, details["entry_date"]
+    )
+    details["sell_price"] = details["exit_price"].where(
+        is_long, details["entry_price"]
+    )
+    details["ticker"] = ticker
+    details = details.rename(columns={"entry_number": "trade_number"})
+
+    return details[
+        [
+            "trade_number",
+            "ticker",
+            "side",
+            "status",
+            "buy_date",
+            "buy_price",
+            "sell_date",
+            "sell_price",
+            "entry_action",
+            "entry_date",
+            "entry_price",
+            "shares",
+            "entry_notional",
+            "entry_commission",
+            "cash_after_entry",
+            "planned_target_price",
+            "planned_stop_price",
+            "trailing_stop_pct",
+            "planned_risk_per_share",
+            "planned_reward_per_share",
+            "planned_reward_risk_ratio",
+            "exit_action",
+            "exit_date",
+            "exit_price",
+            "exit_notional",
+            "exit_commission",
+            "cash_after_exit",
+            "exit_reason",
+            "holding_sessions",
+            "realized_pnl",
+            "return_pct",
+        ]
+    ].sort_values("trade_number", ignore_index=True)
+
+
 def export_backtest_results(
     backtest,
     ticker,
     start_date,
     output_dir="output",
 ):
-    """Export summary, order, trade, and equity frames as CSV files."""
+    """Export summary, order, trade, equity, and trade-detail CSV files."""
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
@@ -83,6 +276,7 @@ def export_backtest_results(
     transactions = backtest["transactions"]
     round_trips = backtest["round_trips"]
     equity_curve = backtest["equity_curve"]
+    trade_details = prepare_trade_details(backtest, ticker)
     stem = (
         f"backtest_{clean_symbol_for_filename(ticker)}_"
         f"{pd.Timestamp(start_date):%Y%m%d}_{equity_curve['Date'].max():%Y%m%d}"
@@ -92,11 +286,13 @@ def export_backtest_results(
         "orders": output_path / f"{stem}_orders.csv",
         "trades": output_path / f"{stem}_trades.csv",
         "equity": output_path / f"{stem}_equity.csv",
+        "trade_details": output_path / f"{stem}_trade_details.csv",
     }
     summary.to_csv(files["summary"], index=False)
     transactions.to_csv(files["orders"], index=False)
     round_trips.to_csv(files["trades"], index=False)
     equity_curve.to_csv(files["equity"], index=False)
+    trade_details.to_csv(files["trade_details"], index=False)
     return files
 
 

@@ -11,6 +11,7 @@ from .reporting import (
     export_backtest_results,
     plot_backtest_results,
     prepare_backtest_results,
+    prepare_trade_details,
 )
 from .workflow import load_backtest_market_data
 
@@ -23,6 +24,7 @@ __all__ = [
     "load_price_history_cached",
     "plot_backtest_results",
     "prepare_backtest_results",
+    "prepare_trade_details",
     "resolve_benchmark",
     "run_price_intent_backtest",
 ]
