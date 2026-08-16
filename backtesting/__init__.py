@@ -6,7 +6,7 @@ from .data import (
     load_price_history_cached,
     resolve_benchmark,
 )
-from .engine import run_price_intent_backtest
+from .engine import build_dynamic_price_levels, run_price_intent_backtest
 from .reporting import (
     export_backtest_results,
     plot_backtest_results,
@@ -15,6 +15,7 @@ from .reporting import (
 from .workflow import load_backtest_market_data
 
 __all__ = [
+    "build_dynamic_price_levels",
     "clean_symbol_for_filename",
     "current_index_membership",
     "export_backtest_results",

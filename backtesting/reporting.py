@@ -8,6 +8,33 @@ import pandas as pd
 from .data import clean_symbol_for_filename
 
 
+def _plot_price_level(ax, dates, values, color, label, linestyle="--"):
+    """Plot either a scalar horizontal level or a per-session level series."""
+    if values is None:
+        return
+    if pd.api.types.is_scalar(values):
+        ax.axhline(
+            float(values),
+            color=color,
+            linestyle=linestyle,
+            linewidth=1.5,
+            label=label,
+        )
+        return
+
+    series = pd.to_numeric(pd.Series(values).reset_index(drop=True), errors="coerce")
+    if len(series) != len(dates):
+        raise ValueError(f"{label} must have one value per plotted session")
+    ax.plot(
+        dates,
+        series,
+        color=color,
+        linestyle=linestyle,
+        linewidth=1.5,
+        label=label,
+    )
+
+
 def prepare_backtest_results(backtest):
     """Return result frames and notebook-friendly display frames."""
     summary = backtest["summary"].copy()
@@ -91,9 +118,13 @@ def plot_backtest_results(
     transactions = backtest["transactions"]
     round_trips = backtest["round_trips"]
     equity_curve = backtest["equity_curve"]
+    shorts_enabled = backtest.get("allow_short", False)
     summary_row = summary.iloc[0]
-    buy_orders = transactions[transactions["action"] == "BUY"]
-    sell_orders = transactions[transactions["action"] == "SELL"]
+    long_entries = transactions[transactions["action"] == "BUY"]
+    short_entries = transactions[transactions["action"] == "SELL_SHORT"]
+    exit_orders = transactions[
+        transactions["action"].isin(["SELL", "BUY_TO_COVER"])
+    ]
 
     fig, (ax_price, ax_equity, ax_drawdown) = plt.subplots(
         3,
@@ -118,62 +149,80 @@ def plot_backtest_results(
         alpha=0.10,
         label="Daily low-high",
     )
-    ax_price.axhline(
+    _plot_price_level(
+        ax_price,
+        prices["Date"],
         buy_price,
-        color="#2e7d32",
-        linestyle="--",
-        linewidth=1.5,
-        label=f"Buy limit {buy_price:,.2f}",
+        "#2e7d32",
+        "Dynamic buy / short target" if shorts_enabled else "Dynamic buy",
     )
-    if sell_price is not None:
-        ax_price.axhline(
-            sell_price,
-            color="#6a1b9a",
-            linestyle="--",
-            linewidth=1.5,
-            label=f"Target {sell_price:,.2f}",
+    _plot_price_level(
+        ax_price,
+        prices["Date"],
+        sell_price,
+        "#6a1b9a",
+        "Dynamic sell / short entry" if shorts_enabled else "Dynamic target",
+    )
+    _plot_price_level(
+        ax_price,
+        prices["Date"],
+        stop_loss,
+        "#c62828",
+        "Dynamic long stop",
+        linestyle=":",
+    )
+    if shorts_enabled and "short_fixed_stop" in equity_curve:
+        _plot_price_level(
+            ax_price,
+            prices["Date"],
+            equity_curve["short_fixed_stop"],
+            "#ef6c00",
+            "Dynamic short stop",
+            linestyle=":",
         )
-    if stop_loss is not None:
-        ax_price.axhline(
-            stop_loss,
-            color="#c62828",
-            linestyle="--",
-            linewidth=1.5,
-            label=f"Stop {stop_loss:,.2f}",
-        )
-    if not buy_orders.empty:
+    if not long_entries.empty:
         ax_price.scatter(
-            buy_orders["Date"],
-            buy_orders["fill_price"],
+            long_entries["Date"],
+            long_entries["fill_price"],
             marker="^",
             s=100,
             color="#2e7d32",
             edgecolor="white",
             linewidth=0.8,
             zorder=5,
-            label="Buy fill",
+            label="Long entry",
         )
-    if not sell_orders.empty:
-        target_sales = sell_orders["reason"] == "TARGET"
+    if not short_entries.empty:
         ax_price.scatter(
-            sell_orders.loc[target_sales, "Date"],
-            sell_orders.loc[target_sales, "fill_price"],
+            short_entries["Date"],
+            short_entries["fill_price"],
             marker="v",
             s=100,
-            color="#6a1b9a",
+            color="#ef6c00",
             edgecolor="white",
             linewidth=0.8,
+            zorder=5,
+            label="Short entry",
+        )
+    if not exit_orders.empty:
+        target_exits = exit_orders["reason"] == "TARGET"
+        ax_price.scatter(
+            exit_orders.loc[target_exits, "Date"],
+            exit_orders.loc[target_exits, "fill_price"],
+            marker="x",
+            s=100,
+            color="#6a1b9a",
+            linewidth=2,
             zorder=5,
             label="Target exit",
         )
         ax_price.scatter(
-            sell_orders.loc[~target_sales, "Date"],
-            sell_orders.loc[~target_sales, "fill_price"],
-            marker="v",
+            exit_orders.loc[~target_exits, "Date"],
+            exit_orders.loc[~target_exits, "fill_price"],
+            marker="x",
             s=100,
             color="#c62828",
-            edgecolor="white",
-            linewidth=0.8,
+            linewidth=2,
             zorder=5,
             label="Risk/time exit",
         )
