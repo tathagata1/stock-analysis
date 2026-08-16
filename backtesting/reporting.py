@@ -298,10 +298,7 @@ def export_backtest_results(
 
 def plot_backtest_results(
     backtest,
-    benchmark_history,
     ticker,
-    index_name,
-    benchmark_ticker,
     buy_price,
     sell_price,
     stop_loss,
@@ -432,31 +429,6 @@ def plot_backtest_results(
     ax_price.set_ylabel(f"{ticker} price")
     ax_price.legend(loc="upper left", ncol=2)
 
-    ax_benchmark = ax_price.twinx()
-    benchmark_price_column = (
-        "Adj Close"
-        if "Adj Close" in benchmark_history
-        and benchmark_history["Adj Close"].notna().any()
-        else "Close"
-    )
-    benchmark_plot = benchmark_history.set_index("Date")[benchmark_price_column].sort_index()
-    benchmark_plot = benchmark_plot.loc[
-        (benchmark_plot.index >= prices["Date"].min())
-        & (benchmark_plot.index <= prices["Date"].max())
-    ]
-    if not benchmark_plot.empty:
-        benchmark_return_line = (benchmark_plot / benchmark_plot.iloc[0] - 1) * 100
-        ax_benchmark.plot(
-            benchmark_return_line.index,
-            benchmark_return_line,
-            color="#616161",
-            linestyle=":",
-            linewidth=1.6,
-            label=f"{index_name} ({benchmark_ticker}) return",
-        )
-        ax_benchmark.set_ylabel("Benchmark return (%)", color="#616161")
-        ax_benchmark.legend(loc="upper right")
-
     ax_equity.plot(
         equity_curve["Date"],
         equity_curve["strategy_equity"],
@@ -471,15 +443,6 @@ def plot_backtest_results(
         linewidth=1.7,
         label=f"Buy & hold {ticker}",
     )
-    if equity_curve["benchmark_equity"].notna().any():
-        ax_equity.plot(
-            equity_curve["Date"],
-            equity_curve["benchmark_equity"],
-            color="#616161",
-            linestyle="--",
-            linewidth=1.5,
-            label=f"{index_name} benchmark",
-        )
     ax_equity.axhline(
         initial_capital,
         color="#9e9e9e",

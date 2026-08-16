@@ -87,6 +87,17 @@ def test_buy_hold_and_benchmark_use_adjusted_close():
     assert "annualized_volatility_pct" in result["summary"]
 
 
+def test_omitted_benchmark_skips_benchmark_calculations():
+    history = _history([10, 10], [11, 11], [9, 9], [10, 10])
+    result = run_price_intent_backtest(
+        history, None, entry_limit=1, target=2, fixed_stop=0.5,
+        capital=100, liquidate_at_end=True,
+    )
+    assert "benchmark_equity" not in result["equity_curve"]
+    assert "benchmark_return_pct" not in result["summary"]
+    assert "excess_vs_benchmark_pct_points" not in result["summary"]
+
+
 def test_market_reentries_recalculate_percentage_levels_from_each_fill():
     history = _history(
         opens=[100, 100, 120, 120],

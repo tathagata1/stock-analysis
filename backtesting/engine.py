@@ -350,7 +350,9 @@ def run_price_intent_backtest(
     This lets every re-entry establish fresh percentage-based price levels.
     """
     prices = normalize_history(history)
-    benchmark_prices = normalize_history(benchmark)
+    benchmark_prices = (
+        normalize_history(benchmark) if benchmark is not None else pd.DataFrame()
+    )
     short_entry_limit = target if allow_short and short_entry_limit is None else short_entry_limit
     short_target = entry_limit if allow_short and short_target is None else short_target
     levels = pd.DataFrame(
@@ -842,9 +844,10 @@ def run_price_intent_backtest(
     equity["buy_hold_equity"] = (
         float(capital) * total_return_price / total_return_price.iloc[0]
     )
-    equity["benchmark_equity"] = _aligned_benchmark_equity(
-        equity["Date"], benchmark_prices, capital
-    ).to_numpy()
+    if not benchmark_prices.empty:
+        equity["benchmark_equity"] = _aligned_benchmark_equity(
+            equity["Date"], benchmark_prices, capital
+        ).to_numpy()
     equity["drawdown_pct"] = (
         equity["strategy_equity"] / equity["strategy_equity"].cummax() - 1
     ) * 100
@@ -864,8 +867,9 @@ def run_price_intent_backtest(
     ) * 100
     benchmark_return_pct = (
         (equity["benchmark_equity"].dropna().iloc[-1] / float(capital) - 1) * 100
-        if equity["benchmark_equity"].notna().any()
-        else np.nan
+        if "benchmark_equity" in equity
+        and equity["benchmark_equity"].notna().any()
+        else None
     )
     completed_trades = len(round_trips_frame)
     winning_trades = int((round_trips_frame["pnl"] > 0).sum()) if completed_trades else 0
@@ -904,60 +908,59 @@ def run_price_intent_backtest(
         else 0.0
     )
 
-    summary = pd.DataFrame(
-        [
-            {
-                "start_date": equity["Date"].iloc[0],
-                "end_date": equity["Date"].iloc[-1],
-                "initial_capital": float(capital),
-                "ending_equity": ending_equity,
-                "strategy_return_pct": total_return_pct,
-                "annualized_return_pct": annualized_return_pct,
-                "buy_hold_return_pct": buy_hold_return_pct,
-                "benchmark_return_pct": benchmark_return_pct,
-                "excess_vs_buy_hold_pct_points": total_return_pct - buy_hold_return_pct,
-                "excess_vs_benchmark_pct_points": total_return_pct
-                - benchmark_return_pct,
-                "max_drawdown_pct": equity["drawdown_pct"].min(),
-                "annualized_volatility_pct": annualized_volatility_pct,
-                "sharpe_ratio": sharpe_ratio,
-                "sortino_ratio": sortino_ratio,
-                "completed_trades": completed_trades,
-                "long_trades": (
-                    int((round_trips_frame["side"] == "LONG").sum())
-                    if completed_trades
-                    else 0
-                ),
-                "short_trades": (
-                    int((round_trips_frame["side"] == "SHORT").sum())
-                    if completed_trades
-                    else 0
-                ),
-                "winning_trades": winning_trades,
-                "win_rate_pct": (
-                    winning_trades / completed_trades * 100
-                    if completed_trades
-                    else np.nan
-                ),
-                "total_realized_pnl": (
-                    round_trips_frame["pnl"].sum() if completed_trades else 0.0
-                ),
-                "exposure_pct": equity["shares"].ne(0).mean() * 100,
-                "average_trade_pnl": (
-                    round_trips_frame["pnl"].mean() if completed_trades else np.nan
-                ),
-                "average_holding_sessions": (
-                    round_trips_frame["holding_sessions"].mean()
-                    if completed_trades
-                    else np.nan
-                ),
-                "profit_factor": profit_factor,
-                "total_commissions": total_commissions,
-                "turnover_multiple": turnover,
-                "entry_bar_ambiguities": entry_bar_ambiguities,
-            }
-        ]
-    )
+    summary_row = {
+        "start_date": equity["Date"].iloc[0],
+        "end_date": equity["Date"].iloc[-1],
+        "initial_capital": float(capital),
+        "ending_equity": ending_equity,
+        "strategy_return_pct": total_return_pct,
+        "annualized_return_pct": annualized_return_pct,
+        "buy_hold_return_pct": buy_hold_return_pct,
+        "excess_vs_buy_hold_pct_points": total_return_pct - buy_hold_return_pct,
+        "max_drawdown_pct": equity["drawdown_pct"].min(),
+        "annualized_volatility_pct": annualized_volatility_pct,
+        "sharpe_ratio": sharpe_ratio,
+        "sortino_ratio": sortino_ratio,
+        "completed_trades": completed_trades,
+        "long_trades": (
+            int((round_trips_frame["side"] == "LONG").sum())
+            if completed_trades
+            else 0
+        ),
+        "short_trades": (
+            int((round_trips_frame["side"] == "SHORT").sum())
+            if completed_trades
+            else 0
+        ),
+        "winning_trades": winning_trades,
+        "win_rate_pct": (
+            winning_trades / completed_trades * 100
+            if completed_trades
+            else np.nan
+        ),
+        "total_realized_pnl": (
+            round_trips_frame["pnl"].sum() if completed_trades else 0.0
+        ),
+        "exposure_pct": equity["shares"].ne(0).mean() * 100,
+        "average_trade_pnl": (
+            round_trips_frame["pnl"].mean() if completed_trades else np.nan
+        ),
+        "average_holding_sessions": (
+            round_trips_frame["holding_sessions"].mean()
+            if completed_trades
+            else np.nan
+        ),
+        "profit_factor": profit_factor,
+        "total_commissions": total_commissions,
+        "turnover_multiple": turnover,
+        "entry_bar_ambiguities": entry_bar_ambiguities,
+    }
+    if benchmark_return_pct is not None:
+        summary_row["benchmark_return_pct"] = benchmark_return_pct
+        summary_row["excess_vs_benchmark_pct_points"] = (
+            total_return_pct - benchmark_return_pct
+        )
+    summary = pd.DataFrame([summary_row])
 
     return {
         "price_history": prices,
