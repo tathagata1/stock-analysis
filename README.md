@@ -160,7 +160,7 @@ The independent price-intent strategy package.
 
 - `data.py`: normalized, cached ticker and benchmark history
 - `engine.py`: causal rolling levels, fills, position accounting, and metrics
-- `signal.py`: one-session-lagged backtest for precomputed composite signals
+- `signal.py`: causal composite-signal history and one-session-lagged signal helpers
 - `reporting.py`: trade detail, charts, and CSV exports
 - `workflow.py`: single- and multi-ticker market-data preparation
 
@@ -183,16 +183,14 @@ Failures are retained in a separate scan table instead of terminating a universe
 
 ### `04_backtesting.ipynb`
 
-Backtests indicator-directed market entries with entry-relative profit targets
-and trailing stops. Technical scores are lagged by one session:
-bullish scores can open longs, while bearish scores can exit longs and can open
-shorts only when short selling is enabled. Daily-bar entry ambiguity, stop
-widening, costs, and end liquidation are explicit parameters.
-
-For the composite signal itself, call
-`backtesting.run_composite_signal_backtest` with a historical prediction frame.
-Every decision is shifted by one session and executes at the next open. Results
-still depend on the historical input data and universe supplied by the caller.
+Backtests the same composite labels used by the index scan with entry-relative
+profit targets and trailing stops. The first 253 completed sessions are used as
+analysis warm-up, and every flat-state decision executes no earlier than the next
+session's open. While a position is open, new labels are ignored and the target,
+stop, and holding-period rules manage the exit. After an exit, the completed
+exit-session label can drive a later long or, when enabled, short entry. Daily-bar
+entry ambiguity, stop widening, costs, and end liquidation remain explicit
+parameters.
 
 ## Signal Engine
 

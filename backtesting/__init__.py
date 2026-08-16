@@ -14,10 +14,15 @@ from .reporting import (
     prepare_trade_details,
 )
 from .workflow import load_backtest_market_data, load_multiple_backtest_market_data
-from .signal import build_technical_entry_signal, run_composite_signal_backtest
+from .signal import (
+    build_composite_signal_history,
+    build_technical_entry_signal,
+    run_composite_signal_backtest,
+)
 
 __all__ = [
     "build_dynamic_price_levels",
+    "build_composite_signal_history",
     "build_technical_entry_signal",
     "clean_symbol_for_filename",
     "current_index_membership",

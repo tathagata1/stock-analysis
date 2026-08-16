@@ -270,3 +270,70 @@ def test_bearish_indicator_sells_existing_long_when_shorting_is_disabled():
         "SIGNAL_EXIT",
     ]
     assert result["transactions"].iloc[-1]["fill_price"] == pytest.approx(90)
+
+
+def test_composite_labels_manage_open_trade_by_levels_then_reanalyse():
+    history = _history(
+        opens=[100, 100, 100, 109, 90],
+        highs=[101, 101, 101, 111, 91],
+        lows=[99, 99, 99, 108, 89],
+        closes=[100, 100, 100, 110, 90],
+    )
+    result = run_price_intent_backtest(
+        history,
+        None,
+        entry_limit=None,
+        capital=100,
+        use_whole_shares=False,
+        entries_limit=2,
+        wait_days=0,
+        minimum_holding_days=0,
+        entry_at_market=True,
+        entry_signal_text=[
+            "WEAK BUY",
+            "STRONG SELL",
+            "HOLD",
+            "WEAK SELL",
+            "HOLD",
+        ],
+        allow_short=True,
+        target_pct=0.10,
+        trailing_pct=0.50,
+        liquidate_at_end=False,
+    )
+
+    transactions = result["transactions"]
+    assert transactions["action"].tolist() == ["BUY", "SELL", "SELL_SHORT"]
+    assert transactions["reason"].tolist() == [
+        "COMPOSITE_SIGNAL_ENTRY",
+        "TARGET",
+        "COMPOSITE_SIGNAL_ENTRY",
+    ]
+    assert transactions.iloc[1]["Date"] == history.loc[3, "Date"]
+    assert transactions.iloc[2]["Date"] == history.loc[4, "Date"]
+    assert transactions.iloc[2]["decision_signal_text"] == "WEAK SELL"
+    assert result["execution_assumptions"]["entry_signal_mode"] == "composite_label"
+    assert result["execution_assumptions"]["long_entry_threshold"] is None
+
+
+def test_composite_sell_label_stays_flat_when_shorting_is_disabled():
+    history = _history(
+        opens=[100, 100],
+        highs=[101, 101],
+        lows=[99, 99],
+        closes=[100, 100],
+    )
+    result = run_price_intent_backtest(
+        history,
+        None,
+        entry_limit=None,
+        capital=100,
+        use_whole_shares=False,
+        entry_at_market=True,
+        entry_signal_text=["WEAK SELL", "HOLD"],
+        allow_short=False,
+        target_pct=0.10,
+        liquidate_at_end=False,
+    )
+
+    assert result["transactions"].empty

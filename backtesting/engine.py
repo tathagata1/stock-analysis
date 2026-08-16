@@ -19,6 +19,8 @@ TRANSACTION_COLUMNS = [
     "cash_after",
     "realized_pnl",
     "entry_number",
+    "decision_signal",
+    "decision_signal_text",
 ]
 ROUND_TRIP_COLUMNS = [
     "entry_number",
@@ -107,6 +109,18 @@ def _coerce_level(value, length, name):
     return pd.to_numeric(series, errors="coerce")
 
 
+def _coerce_signal_text(value, length):
+    if value is None:
+        return pd.Series(pd.NA, index=range(length), dtype="string")
+    if np.isscalar(value):
+        return pd.Series(str(value), index=range(length), dtype="string")
+
+    series = pd.Series(value).reset_index(drop=True)
+    if len(series) != length:
+        raise ValueError("entry_signal_text must have one value per price-history row")
+    return series.astype("string").str.strip().str.upper()
+
+
 def _validate_relationship(left, right, comparison, message):
     comparable = left.notna() & right.notna()
     if comparable.any() and not comparison(left[comparable], right[comparable]).all():
@@ -131,6 +145,7 @@ def _validate_backtest_inputs(
     level_update_mode,
     entry_at_market,
     entry_signal,
+    entry_signal_text,
     long_entry_threshold,
     short_entry_threshold,
     target_pct,
@@ -205,12 +220,36 @@ def _validate_backtest_inputs(
         raise ValueError('level_update_mode must be either "dynamic" or "entry"')
     if entry_at_market:
         signal_values = entry_signal.dropna()
-        if signal_values.empty:
+        signal_text_values = entry_signal_text.dropna()
+        if signal_values.empty and signal_text_values.empty:
             raise ValueError(
-                "entry_signal must contain at least one numeric indicator value "
+                "entry_signal or entry_signal_text must contain at least one value "
                 "when entry_at_market=True"
             )
-        if float(short_entry_threshold) >= float(long_entry_threshold):
+        if not signal_values.empty and not signal_text_values.empty:
+            raise ValueError(
+                "Provide either entry_signal or entry_signal_text, not both"
+            )
+        allowed_signal_text = {
+            "STRONG SELL",
+            "WEAK SELL",
+            "HOLD",
+            "WEAK BUY",
+            "STRONG BUY",
+            "INSUFFICIENT DATA",
+        }
+        invalid_signal_text = set(signal_text_values.unique()).difference(
+            allowed_signal_text
+        )
+        if invalid_signal_text:
+            raise ValueError(
+                "entry_signal_text contains unsupported labels: "
+                + ", ".join(sorted(invalid_signal_text))
+            )
+        if (
+            not signal_values.empty
+            and float(short_entry_threshold) >= float(long_entry_threshold)
+        ):
             raise ValueError(
                 "short_entry_threshold must be below long_entry_threshold"
             )
@@ -347,6 +386,7 @@ def run_price_intent_backtest(
     allow_stop_widening=False,
     entry_at_market=False,
     entry_signal=None,
+    entry_signal_text=None,
     long_entry_threshold=0.1,
     short_entry_threshold=-0.1,
     target_pct=None,
@@ -354,9 +394,10 @@ def run_price_intent_backtest(
 ):
     """Run a one-position long/short backtest and return result data frames.
 
-    ``entry_at_market`` uses the prior session's signed ``entry_signal`` to
-    choose an entry at the next open. Positive signals can open long positions;
-    negative signals can open short positions only when ``allow_short`` is true.
+    ``entry_at_market`` uses either the prior session's signed ``entry_signal``
+    or composite ``entry_signal_text`` label to choose an entry at the next
+    open. Composite labels are consulted only while flat; an open position is
+    managed by its target, stop, and holding-period rules.
     When ``target_pct`` or ``fixed_stop_pct`` is supplied, that exit level is
     calculated from the actual slipped entry fill and locked to the position.
     """
@@ -386,11 +427,15 @@ def run_price_intent_backtest(
             "entry_signal": _coerce_level(
                 entry_signal, len(prices), "entry_signal"
             ),
+            "entry_signal_text": _coerce_signal_text(
+                entry_signal_text, len(prices)
+            ),
         }
     )
     # Indicators calculated from a completed daily candle can first be acted on
     # at the following session's open.
     levels["decision_signal"] = levels["entry_signal"].shift(1)
+    levels["decision_signal_text"] = levels["entry_signal_text"].shift(1)
     _validate_backtest_inputs(
         prices,
         levels,
@@ -409,6 +454,7 @@ def run_price_intent_backtest(
         level_update_mode,
         entry_at_market,
         levels["entry_signal"],
+        levels["entry_signal_text"],
         long_entry_threshold,
         short_entry_threshold,
         target_pct,
@@ -431,11 +477,17 @@ def run_price_intent_backtest(
         action_today = "HOLD"
         active_stop = np.nan
         decision_signal = current["decision_signal"]
+        decision_signal_text = current["decision_signal_text"]
 
-        # A completed prior-session indicator can close an opposing position at
-        # today's open. Bearish signals may always sell a long; allow_short only
-        # controls whether they may subsequently open a short position.
-        if position is not None and entry_at_market and pd.notna(decision_signal):
+        # Preserve the legacy numeric-signal exit behavior. Composite labels are
+        # intentionally ignored until the target/stop/holding rules close the
+        # position, after which the latest completed label may open another one.
+        if (
+            position is not None
+            and entry_at_market
+            and entry_signal_text is None
+            and pd.notna(decision_signal)
+        ):
             holding_sessions = row_index - position["entry_index"]
             minimum_hold_met = (
                 minimum_holding_days is None
@@ -662,16 +714,26 @@ def run_price_intent_backtest(
             and (reentry or entries == 0)
         )
         if entry_at_market and can_consider_entry:
-            entry_side = (
-                "LONG"
-                if pd.notna(decision_signal)
-                and decision_signal >= float(long_entry_threshold)
-                else "SHORT"
-                if allow_short
-                and pd.notna(decision_signal)
-                and decision_signal <= float(short_entry_threshold)
-                else None
-            )
+            if pd.notna(decision_signal_text):
+                entry_side = (
+                    "LONG"
+                    if decision_signal_text in {"WEAK BUY", "STRONG BUY"}
+                    else "SHORT"
+                    if allow_short
+                    and decision_signal_text in {"WEAK SELL", "STRONG SELL"}
+                    else None
+                )
+            else:
+                entry_side = (
+                    "LONG"
+                    if pd.notna(decision_signal)
+                    and decision_signal >= float(long_entry_threshold)
+                    else "SHORT"
+                    if allow_short
+                    and pd.notna(decision_signal)
+                    and decision_signal <= float(short_entry_threshold)
+                    else None
+                )
         else:
             long_signal = (
                 can_consider_entry
@@ -760,7 +822,9 @@ def run_price_intent_backtest(
                         "action": "BUY" if entry_side == "LONG" else "SELL_SHORT",
                         "side": entry_side,
                         "reason": (
-                            "MARKET_ENTRY"
+                            "COMPOSITE_SIGNAL_ENTRY"
+                            if entry_at_market and pd.notna(decision_signal_text)
+                            else "MARKET_ENTRY"
                             if entry_at_market
                             else "BUY_LIMIT" if entry_side == "LONG" else "SHORT_ENTRY"
                         ),
@@ -772,6 +836,8 @@ def run_price_intent_backtest(
                         "cash_after": cash,
                         "realized_pnl": np.nan,
                         "entry_number": entries,
+                        "decision_signal": decision_signal,
+                        "decision_signal_text": decision_signal_text,
                     }
                 )
                 action_today = f"ENTER {entry_side}"
@@ -1045,11 +1111,22 @@ def run_price_intent_backtest(
             "allow_stop_widening": bool(allow_stop_widening),
             "entry_at_market": bool(entry_at_market),
             "entry_signal_lag_sessions": 1 if entry_at_market else None,
+            "entry_signal_mode": (
+                "composite_label"
+                if entry_at_market and entry_signal_text is not None
+                else "numeric"
+                if entry_at_market
+                else None
+            ),
             "long_entry_threshold": (
-                float(long_entry_threshold) if entry_at_market else None
+                float(long_entry_threshold)
+                if entry_at_market and entry_signal_text is None
+                else None
             ),
             "short_entry_threshold": (
-                float(short_entry_threshold) if entry_at_market else None
+                float(short_entry_threshold)
+                if entry_at_market and entry_signal_text is None
+                else None
             ),
             "target_pct": target_pct,
             "fixed_stop_pct": fixed_stop_pct,

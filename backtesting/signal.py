@@ -3,6 +3,7 @@
 import numpy as np
 import pandas as pd
 
+import analysis_types.prediction as prediction
 import config.config as config
 from analysis_functions.technical_analysis import (
     calculate_buy_score,
@@ -11,6 +12,63 @@ from analysis_functions.technical_analysis import (
 )
 from .data import normalize_history
 from .engine import _aligned_benchmark_equity
+
+
+def build_composite_signal_history(
+    history,
+    ticker,
+    trailing_days=253,
+    include_sentiment=False,
+):
+    """Build causal historical labels with the same pipeline as the index scan.
+
+    A label becomes eligible after ``trailing_days`` completed trading sessions.
+    The execution engine applies a further one-session lag, so the first possible
+    order is placed at the following session's open. Current-data fallbacks and
+    current sentiment are disabled to prevent them leaking into historical rows.
+    """
+    if include_sentiment:
+        raise ValueError(
+            "Historical sentiment snapshots are unavailable; "
+            "include_sentiment must be False for a causal backtest"
+        )
+    if int(trailing_days) < 1:
+        raise ValueError("trailing_days must be at least 1")
+
+    symbol = str(ticker).strip().upper()
+    if not symbol:
+        raise ValueError("ticker must be a non-empty symbol")
+
+    prices = normalize_history(history)
+    if prices.empty:
+        raise ValueError("Price history is empty")
+    analysis_input = prices.copy()
+    analysis_input["TICKER"] = symbol
+
+    predictions = prediction.get_prediction(
+        analysis_input,
+        stats=None,
+        include_sentiment=False,
+        historical_analysis=True,
+        allow_latest_fallback=False,
+    )
+    predictions = prediction.add_total_signal(predictions)
+    predictions = prediction.convert_signal_to_text(predictions)
+    predictions = predictions.sort_values("Date").reset_index(drop=True)
+
+    completed_sessions = pd.Series(
+        np.arange(1, len(predictions) + 1), index=predictions.index
+    )
+    predictions["backtest_signal_eligible"] = completed_sessions.ge(
+        int(trailing_days)
+    )
+    predictions.loc[
+        ~predictions["backtest_signal_eligible"], "Signal"
+    ] = np.nan
+    predictions.loc[
+        ~predictions["backtest_signal_eligible"], "Signal_Text"
+    ] = "INSUFFICIENT DATA"
+    return predictions
 
 
 def build_technical_entry_signal(history):

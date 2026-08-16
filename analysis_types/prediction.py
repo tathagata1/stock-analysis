@@ -209,7 +209,13 @@ def _build_point_in_time_raw_advanced_data(snapshot_row, price_window):
     return raw_data
 
 
-def get_prediction(df, stats=None, include_sentiment=True, historical_analysis=True):
+def get_prediction(
+    df,
+    stats=None,
+    include_sentiment=True,
+    historical_analysis=True,
+    allow_latest_fallback=True,
+):
     ticker = df["TICKER"].iloc[0] if not df.empty and "TICKER" in df.columns else "UNKNOWN"
     logger.info("Building prediction frame. ticker=%s include_sentiment=%s rows=%s", ticker, include_sentiment, len(df))
 
@@ -237,7 +243,7 @@ def get_prediction(df, stats=None, include_sentiment=True, historical_analysis=T
 
     fallback_stats = stats.to_dict() if hasattr(stats, "to_dict") else _empty_value_stats(ticker)
     fallback_raw_advanced = None
-    if snapshot_frame.empty:
+    if snapshot_frame.empty and allow_latest_fallback:
         try:
             fallback_raw_advanced = dao.get_advanced_financial_metrics(ticker).iloc[0].to_dict()
         except Exception:
