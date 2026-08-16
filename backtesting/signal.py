@@ -4,8 +4,28 @@ import numpy as np
 import pandas as pd
 
 import config.config as config
+from analysis_functions.technical_analysis import (
+    calculate_buy_score,
+    calculate_sell_score,
+    get_technical_analysis_calculations,
+)
 from .data import normalize_history
 from .engine import _aligned_benchmark_equity
+
+
+def build_technical_entry_signal(history):
+    """Return a causal signed entry signal derived from technical indicators.
+
+    Positive values are bullish and negative values are bearish. Warm-up rows
+    remain missing so a market-entry strategy waits for complete indicator data.
+    The backtest engine applies the required one-session execution lag.
+    """
+    prices = normalize_history(history)
+    indicators = get_technical_analysis_calculations(prices.copy())
+    buy_score = indicators.apply(calculate_buy_score, axis=1)
+    sell_score = indicators.apply(calculate_sell_score, axis=1)
+    signal = buy_score + sell_score
+    return signal.where(indicators["technical_data_available"])
 
 
 def run_composite_signal_backtest(

@@ -183,10 +183,11 @@ Failures are retained in a separate scan table instead of terminating a universe
 
 ### `04_backtesting.ipynb`
 
-Backtests a rolling low/high channel with ATR-based risk controls. This is a
-separate price-intent strategy and does not validate the composite index-search
-signal. Daily-bar entry ambiguity, dynamic-versus-entry levels, stop widening,
-costs, and end liquidation are explicit parameters.
+Backtests indicator-directed market entries with entry-relative profit targets
+and trailing stops. Technical scores are lagged by one session:
+bullish scores can open longs, while bearish scores can exit longs and can open
+shorts only when short selling is enabled. Daily-bar entry ambiguity, stop
+widening, costs, and end liquidation are explicit parameters.
 
 For the composite signal itself, call
 `backtesting.run_composite_signal_backtest` with a historical prediction frame.
